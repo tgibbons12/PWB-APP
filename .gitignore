@@ -24,3 +24,4 @@ dist/
 # OS/editor
 .DS_Store
 .vscode/
+.DS_Store
