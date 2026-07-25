@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Server-side generated output / config
+generated_output/
+takeoff_perf_config.json
+takeoff_perf_revisions.json
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+
+# Env files
+.env
+.env.local
+.env.*.local
+
+# OS/editor
+.DS_Store
+.vscode/
