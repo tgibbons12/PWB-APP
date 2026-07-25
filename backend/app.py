@@ -112,6 +112,120 @@ def _build_intersections(xml_data):
 # Routes
 # --------------------------------------------------------------------------
 
+@app.route("/api/admin/runway-index", methods=["GET"])
+def runway_index_status():
+    """
+    Reports whether runway_index.dat is present and how many entries it
+    has, so the frontend's admin panel can show current status without
+    needing to re-upload just to check.
+    """
+    dat_path = os.path.join(os.path.dirname(os.path.abspath(core.__file__)), "runway_index.dat")
+    exists = os.path.exists(dat_path)
+    entry_count = None
+    if exists:
+        index_data = core.load_runway_index()
+        entry_count = len(index_data)
+    return jsonify({
+        "exists": exists,
+        "entry_count": entry_count,
+        "path": dat_path,
+    })
+
+
+@app.route("/api/admin/runway-index", methods=["POST"])
+def upload_runway_index():
+    """
+    Accepts a replacement runway_index.dat as raw text in the request body
+    (Content-Type: text/plain) and writes it to the same path
+    load_runway_index() reads from, then clears the in-memory cache so the
+    new data is used on the very next /api/flightplan call — no server
+    restart required.
+
+    IMPORTANT — Railway's filesystem is ephemeral: this file will NOT
+    survive the next deploy or dyno restart. Treat this as a way to patch
+    runway data for the current running instance (e.g. add a missing
+    airport without a full redeploy), not as permanent storage. For a
+    permanent change, still commit runway_index.dat to the repo and
+    redeploy — this endpoint is the fast/temporary path, not a replacement
+    for that.
+
+    No auth is enforced here — this is meant to be called by you directly
+    (e.g. via curl), not exposed as a public-facing UI action, since
+    anyone who can reach this endpoint can overwrite the runway database.
+    """
+    raw_text = request.get_data(as_text=True)
+    if not raw_text or not raw_text.strip():
+        return _error("Empty request body — expected runway_index.dat contents as raw text.")
+
+    # Light format validation: every non-comment, non-blank line must have
+    # at least 4 semicolon-separated fields (ICAO;RWY[_TXWY];TORA_m;...),
+    # and the TORA_m field must parse as a float — matches what
+    # load_runway_index() itself requires, so a malformed upload is caught
+    # here with a clear error instead of silently loading zero entries.
+    bad_lines = []
+    valid_line_count = 0
+    for i, line in enumerate(raw_text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split(";")
+        if len(parts) < 4:
+            bad_lines.append(f"line {i}: expected at least 4 fields, got {len(parts)}")
+            continue
+        try:
+            float(parts[2])
+        except ValueError:
+            bad_lines.append(f"line {i}: TORA_m field '{parts[2]}' is not a number")
+            continue
+        valid_line_count += 1
+
+    if bad_lines:
+        return _error(
+            "runway_index.dat has formatting errors — nothing was written.",
+            status=422,
+            detail="\n".join(bad_lines[:20]) + ("\n…" if len(bad_lines) > 20 else ""),
+        )
+
+    if valid_line_count == 0:
+        return _error("File contained no valid data lines — nothing was written.", status=422)
+
+    dat_path = os.path.join(os.path.dirname(os.path.abspath(core.__file__)), "runway_index.dat")
+    try:
+        with open(dat_path, "w") as f:
+            f.write(raw_text)
+    except OSError as e:
+        return _error("Failed to write runway_index.dat.", status=500, detail=str(e))
+
+    core.reset_runway_index_cache()
+    index_data = core.load_runway_index()  # re-load immediately so entry_count is accurate
+
+    return jsonify({
+        "status": "ok",
+        "valid_data_lines": valid_line_count,
+        "entry_count": len(index_data),
+        "note": "Written to the running instance's filesystem. This will NOT "
+                "survive the next deploy — commit runway_index.dat to the repo "
+                "for a permanent change.",
+    })
+
+
+@app.route("/api/oooi/parse", methods=["POST"])
+def parse_oooi():
+    """
+    Accepts oooi_log.txt CONTENT as raw text (Content-Type: text/plain) —
+    read by the browser directly from the user's chosen save folder via
+    the File System Access API — and returns the parsed off_block time,
+    total_fuel_lbs, and zfw_lbs using the same regex rules the original
+    desktop app used. The server never touches a local filesystem path
+    for this; the browser already has the bytes.
+    """
+    raw_text = request.get_data(as_text=True)
+    if raw_text is None:
+        raw_text = ""
+    result = core.parse_oooi_text(raw_text)
+    return jsonify(result)
+
+
 @app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})

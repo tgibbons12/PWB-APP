@@ -43,13 +43,18 @@ REVISION_FILE = "takeoff_perf_revisions.json"
 # OOOI log path (written by flight_logger.lua)
 OOOI_LOG_PATH = os.path.expanduser("~/Dropbox/ACARS/oooi_log.txt")
 
-def read_oooi_log(path=OOOI_LOG_PATH):
-    """Read oooi_log.txt and return off_block time, total_fuel_lbs, and zfw_lbs."""
+def parse_oooi_text(text):
+    """
+    Parse oooi_log.txt CONTENT (not a path) and return off_block time,
+    total_fuel_lbs, and zfw_lbs. Split out from read_oooi_log() so the
+    server can parse text handed to it by a browser (which has direct
+    access to the user's local oooi_log.txt via the File System Access
+    API folder handle) without needing filesystem access to a path that
+    only exists on someone's local machine.
+    """
     result = {"off_block": None, "total_fuel_lbs": None, "zfw_lbs": None}
-    if not os.path.exists(path):
+    if not text:
         return result
-    with open(path) as f:
-        text = f.read()
 
     # Off Block time
     m = re.search(r"Off Block:\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", text)
@@ -67,6 +72,22 @@ def read_oooi_log(path=OOOI_LOG_PATH):
         result["zfw_lbs"] = float(m.group(1))
 
     return result
+
+
+def read_oooi_log(path=OOOI_LOG_PATH):
+    """
+    Read oooi_log.txt from a local filesystem path and parse it.
+    Only meaningful when this process can see that path directly (e.g.
+    running on the same machine as the Dropbox folder) — on a server
+    deployment, that path doesn't exist and this always returns empty
+    values. Use parse_oooi_text() instead when the file's content is
+    already available (e.g. read client-side and sent to the server).
+    """
+    if not os.path.exists(path):
+        return {"off_block": None, "total_fuel_lbs": None, "zfw_lbs": None}
+    with open(path) as f:
+        text = f.read()
+    return parse_oooi_text(text)
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -442,6 +463,18 @@ def load_runway_index():
     print(f"[INTXN] Loaded runway_index.dat: {len(index)} runway entries")
     _runway_index_cache = index
     return index
+
+
+def reset_runway_index_cache():
+    """
+    Clear the cached runway index so the next load_runway_index() call
+    re-reads runway_index.dat from disk. Needed after an admin uploads a
+    replacement file — without this, the old in-memory index would keep
+    being served until the process restarts (Railway doesn't restart the
+    dyno on its own just because a file on disk changed).
+    """
+    global _runway_index_cache
+    _runway_index_cache = None
 
 
 def get_intersection_groups(icao, rwy_id, full_tora_ft, distance_reject_ft, index_data):

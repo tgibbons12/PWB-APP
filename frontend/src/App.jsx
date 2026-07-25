@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 const css = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -119,6 +119,90 @@ async function apiGenerate(payload) {
   const data = await res.json();
   if (!res.ok) throw new ApiError(data.error || "Generation failed.", data.detail);
   return data;
+}
+
+async function apiRunwayIndexStatus() {
+  const res = await fetch(`${API_BASE}/api/admin/runway-index`);
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(data.error || "Failed to check runway index status.", data.detail);
+  return data;
+}
+
+async function apiUploadRunwayIndex(rawText) {
+  const res = await fetch(`${API_BASE}/api/admin/runway-index`, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: rawText,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(data.error || "Upload failed.", data.detail);
+  return data;
+}
+
+async function apiParseOooi(rawText) {
+  const res = await fetch(`${API_BASE}/api/oooi/parse`, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: rawText,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(data.error || "Failed to parse OOOI log.", data.detail);
+  return data;
+}
+
+// ─── FOLDER HANDLE PERSISTENCE ─────────────────────────────────────────────────
+// localStorage can only store strings, so it can only remember the folder's
+// NAME (cosmetic) — not a reusable handle. FileSystemDirectoryHandle objects
+// are structured-cloneable, so IndexedDB (unlike localStorage) can actually
+// store and later return a working handle. Keyed by SimBrief username since
+// that's the closest thing this app has to a per-person identity — different
+// pilots on the same shared machine/browser can each get their own
+// remembered save folder.
+const FOLDER_DB_NAME  = "tps_folders";
+const FOLDER_STORE    = "handles";
+
+function openFolderDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(FOLDER_DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(FOLDER_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function saveFolderHandleForUser(username, handle) {
+  if (!username) return;
+  const db = await openFolderDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(FOLDER_STORE, "readwrite");
+    tx.objectStore(FOLDER_STORE).put(handle, username);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function getFolderHandleForUser(username) {
+  if (!username) return null;
+  const db = await openFolderDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FOLDER_STORE, "readonly");
+    const req = tx.objectStore(FOLDER_STORE).get(username);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function clearFolderHandleForUser(username) {
+  if (!username) return;
+  const db = await openFolderDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(FOLDER_STORE, "readwrite");
+    tx.objectStore(FOLDER_STORE).delete(username);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
 class ApiError extends Error {
@@ -289,14 +373,16 @@ function TpsPanel({ xmlData, onGenerate, generating }) {
 }
 
 // ─── CLOSEOUT LEFT PANEL ──────────────────────────────────────────────────────
-function CloseoutPanel({ xmlData, onGenerate, generating }) {
+function CloseoutPanel({ xmlData, onGenerate, generating, dirHandleRef }) {
   const [pax, setPax]       = useState(String(xmlData.pax_count_xml));
   const [cargo, setCargo]   = useState(String(xmlData.cargo_xml));
   const [ramp, setRamp]     = useState(String(xmlData.plan_ramp_xml));
   const [cg, setCg]         = useState("25.0");
   const [zfwOverride, setZfwOverride]       = useState(false);
   const [zfwOverrideVal, setZfwOverrideVal] = useState("");
-  const [oooi, setOooi]     = useState(false);
+  const [oooiReading, setOooiReading] = useState(false);
+  const [oooiMsg, setOooiMsg]         = useState(null);
+  const [oooiMsgErr, setOooiMsgErr]   = useState(false);
 
   const paxN   = parseInt(pax)   || 0;
   const cargoN = parseInt(cargo) || 0;
@@ -315,9 +401,56 @@ function CloseoutPanel({ xmlData, onGenerate, generating }) {
   const zfwK   = (zfw  / 1000).toFixed(1);
   const fuelK  = ((rampN - xmlData.taxi_fuel) / 1000).toFixed(1);
 
+  // Reads oooi_log.txt from the SAME folder already granted for TPS/closeout
+  // auto-save (dirHandleRef) — this is the file the old desktop app used to
+  // read from a hardcoded local Dropbox path. On the server that path never
+  // existed, but the browser already has folder access, so it reads the
+  // file directly and sends just its text to /api/oooi/parse for parsing.
+  async function handleReadOooi() {
+    if (!dirHandleRef?.current) {
+      setOooiMsg("No save folder set — pick one in Settings first.");
+      setOooiMsgErr(true);
+      return;
+    }
+    setOooiReading(true);
+    setOooiMsg(null);
+    setOooiMsgErr(false);
+    try {
+      const fileHandle = await dirHandleRef.current.getFileHandle("oooi_log.txt");
+      const file = await fileHandle.getFile();
+      const text = await file.text();
+      const result = await apiParseOooi(text);
+
+      if (result.total_fuel_lbs == null && result.zfw_lbs == null) {
+        setOooiMsg("oooi_log.txt found, but no fuel/ZFW data could be read from it.");
+        setOooiMsgErr(true);
+        return;
+      }
+
+      if (result.total_fuel_lbs != null) setRamp(String(Math.round(result.total_fuel_lbs)));
+      // OOOI doesn't report CG directly, only ZFW — used here only to flag
+      // a mismatch against the manually-entered value, not to overwrite CG.
+      const parts = [];
+      if (result.total_fuel_lbs != null) parts.push(`fuel ${Math.round(result.total_fuel_lbs).toLocaleString()} lbs`);
+      if (result.zfw_lbs != null) parts.push(`ZFW ${Math.round(result.zfw_lbs).toLocaleString()} lbs`);
+      if (result.off_block) parts.push(`off-block ${result.off_block}`);
+      setOooiMsg(`✓ Loaded from OOOI log: ${parts.join(", ")}`);
+      setOooiMsgErr(false);
+    } catch (e) {
+      if (e.name === "NotFoundError") {
+        setOooiMsg("oooi_log.txt not found in the save folder.");
+      } else {
+        setOooiMsg(e instanceof ApiError ? e.message : "Could not read the OOOI log.");
+      }
+      setOooiMsgErr(true);
+    } finally {
+      setOooiReading(false);
+    }
+  }
+
   function handleGenerateClick() {
     onGenerate("closeout", {
-      pax, cargo, ramp, cg, zfwOverride, zfwOverrideVal, oooi,
+      pax, cargo, ramp, cg, zfwOverride, zfwOverrideVal,
     });
   }
 
@@ -358,20 +491,25 @@ function CloseoutPanel({ xmlData, onGenerate, generating }) {
         </div>
       </div>
 
-      {/* OOOI */}
+      {/* OOOI auto-fill — reads oooi_log.txt from the same save folder used for TPS/closeout output */}
       <div className="srow">
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Toggle checked={oooi} onChange={setOooi} />
-          <span className="lbl" style={{ fontSize: 12, textAlign: "left" }}>Auto-fill from OOOI log</span>
-        </div>
-        {oooi && (
-          <div style={{ width: "100%", paddingTop: 4 }}>
-            <span className="lbl-muted" style={{ fontSize: 11, textAlign: "left", display: "block" }}>
-              OOOI auto-fill reads oooi_log.txt from a local Dropbox path on the
-              original desktop app — that file isn't reachable from this server.
-              Enter fuel and CG manually for now.
-            </span>
-          </div>
+        <button
+          className="sheet-action-btn"
+          onClick={handleReadOooi}
+          disabled={oooiReading || !dirHandleRef?.current}
+          style={{ alignSelf: "flex-start", opacity: dirHandleRef?.current ? 1 : 0.5 }}
+        >
+          {oooiReading ? "Reading…" : "⛽ Auto-fill fuel from OOOI log"}
+        </button>
+        {!dirHandleRef?.current && (
+          <span className="sheet-hint" style={{ display: "block", marginTop: 4 }}>
+            Set a save folder in Settings first — OOOI reads oooi_log.txt from that same folder.
+          </span>
+        )}
+        {oooiMsg && (
+          <span className="sheet-hint" style={{ display: "block", marginTop: 4, color: oooiMsgErr ? "#c0392b" : "#578E48" }}>
+            {oooiMsg}
+          </span>
         )}
       </div>
 
@@ -398,8 +536,41 @@ function CloseoutPanel({ xmlData, onGenerate, generating }) {
 }
 
 // ─── SETTINGS SHEET ───────────────────────────────────────────────────────────
-function SettingsSheet({ onClose, folderName, onPickFolder, onClearFolder, autoSave, onAutoSaveChange }) {
+function SettingsSheet({ onClose, folderName, onPickFolder, onClearFolder, autoSave, onAutoSaveChange, folderNeedsReconnect, onReconnectFolder }) {
   const supported = typeof window !== "undefined" && "showDirectoryPicker" in window;
+
+  const [rwyStatus, setRwyStatus]   = useState(null);
+  const [rwyStatusErr, setRwyStatusErr] = useState(null);
+  const [rwyUploading, setRwyUploading] = useState(false);
+  const [rwyMsg, setRwyMsg]         = useState(null);
+  const [rwyMsgErr, setRwyMsgErr]   = useState(false);
+
+  useEffect(() => {
+    apiRunwayIndexStatus()
+      .then(setRwyStatus)
+      .catch(e => setRwyStatusErr(e instanceof ApiError ? e.message : "Could not reach the server."));
+  }, []);
+
+  async function handleFileChosen(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-choosing the same filename later
+    if (!file) return;
+    setRwyUploading(true);
+    setRwyMsg(null);
+    setRwyMsgErr(false);
+    try {
+      const text = await file.text();
+      const result = await apiUploadRunwayIndex(text);
+      setRwyStatus({ exists: true, entry_count: result.entry_count });
+      setRwyMsg(`✓ Loaded ${result.entry_count} runway entries (${result.valid_data_lines} lines). Not permanent — see note below.`);
+      setRwyMsgErr(false);
+    } catch (e) {
+      setRwyMsg(e instanceof ApiError ? (e.message + (e.detail ? `\n${e.detail}` : "")) : "Could not reach the server.");
+      setRwyMsgErr(true);
+    } finally {
+      setRwyUploading(false);
+    }
+  }
   return (
     <div className="sheet-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="sheet">
@@ -413,11 +584,14 @@ function SettingsSheet({ onClose, folderName, onPickFolder, onClearFolder, autoS
           <div className="sheet-row">
             <span className="sheet-row-lbl">Save Folder</span>
             {folderName
-              ? <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              ? <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <div className="folder-badge">
-                    <div className="folder-badge-dot" />
-                    <span className="folder-badge-txt">{folderName}</span>
+                    <div className="folder-badge-dot" style={folderNeedsReconnect ? { background: "#c0392b" } : undefined} />
+                    <span className="folder-badge-txt">{folderName}{folderNeedsReconnect ? " (disconnected)" : ""}</span>
                   </div>
+                  {folderNeedsReconnect && (
+                    <button className="sheet-action-btn" onClick={onReconnectFolder}>Reconnect</button>
+                  )}
                   <button className="sheet-action-btn" onClick={onClearFolder}>Clear</button>
                 </div>
               : <button className="sheet-action-btn" onClick={onPickFolder} disabled={!supported}
@@ -426,12 +600,53 @@ function SettingsSheet({ onClose, folderName, onPickFolder, onClearFolder, autoS
                 </button>
             }
           </div>
+          {folderName && !folderNeedsReconnect && (
+            <div className="sheet-row">
+              <span className="sheet-hint">Remembered for this SimBrief username — no need to re-pick it next time.</span>
+            </div>
+          )}
           {!supported && (
             <div className="sheet-row">
               <span className="sheet-hint">Requires Safari on iPadOS 16+ or Chrome/Edge on desktop. Files will download normally otherwise.</span>
             </div>
           )}
         </div>
+
+        <div className="sheet-section">
+          <div className="sheet-row">
+            <span className="sheet-row-lbl">Runway Data (runway_index.dat)</span>
+            <span style={{ fontSize: 13, color: "#8e8e93" }}>
+              {rwyStatusErr ? "Status unknown" :
+               rwyStatus === null ? "Checking…" :
+               rwyStatus.exists ? `${rwyStatus.entry_count} entries loaded` : "Not loaded"}
+            </span>
+          </div>
+          <div className="sheet-row">
+            <label className="sheet-action-btn" style={{ display: "inline-block", cursor: rwyUploading ? "default" : "pointer", opacity: rwyUploading ? 0.5 : 1 }}>
+              {rwyUploading ? "Uploading…" : "Upload runway_index.dat…"}
+              <input
+                type="file"
+                accept=".dat,.txt,text/plain"
+                onChange={handleFileChosen}
+                disabled={rwyUploading}
+                style={{ display: "none" }}
+              />
+            </label>
+          </div>
+          {rwyMsg && (
+            <div className="sheet-row">
+              <span className="sheet-hint" style={{ color: rwyMsgErr ? "#c0392b" : "#578E48", whiteSpace: "pre-wrap" }}>{rwyMsg}</span>
+            </div>
+          )}
+          <div className="sheet-row">
+            <span className="sheet-hint">
+              Uploads apply immediately to this running server, but do NOT persist —
+              the next deploy resets to whatever runway_index.dat is committed in the repo.
+              For a permanent update, commit the file and redeploy.
+            </span>
+          </div>
+        </div>
+
         <button className="sheet-close-btn" onClick={onClose}>Done</button>
       </div>
     </div>
@@ -466,6 +681,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [autoSave, setAutoSave]     = useState(false);
   const [folderName, setFolderName] = useState(() => localStorage.getItem("tps_folder_name") || "");
+  const [folderNeedsReconnect, setFolderNeedsReconnect] = useState(false);
   const dirHandleRef                = useRef(null);
 
   async function handleLoadFlightplan() {
@@ -511,17 +727,89 @@ export default function App() {
       localStorage.setItem("tps_folder_name", handle.name);
       setAutoSave(true);
       showToast(`📁 Folder set: ${handle.name}`);
+      // Remember this handle against the current SimBrief username so it
+      // doesn't need to be re-picked next session — see restoreFolderHandle
+      // below for the other half of this.
+      const username = simbriefUsername.trim();
+      if (username) {
+        try { await saveFolderHandleForUser(username, handle); } catch {}
+      }
     } catch (e) {
       if (e.name !== "AbortError") showToast("Could not access folder");
     }
-  }, []);
+  }, [simbriefUsername]);
 
   const handleClearFolder = useCallback(() => {
     dirHandleRef.current = null;
     setFolderName("");
     setAutoSave(false);
     localStorage.removeItem("tps_folder_name");
+    const username = simbriefUsername.trim();
+    if (username) {
+      clearFolderHandleForUser(username).catch(() => {});
+    }
+  }, [simbriefUsername]);
+
+  // Try to restore a remembered folder handle for a given username. Browsers
+  // require a user gesture to re-request permission on a previously-granted
+  // handle in some cases — so this checks silently first (query mode, no
+  // prompt) and only shows a "reconnect" toast if that's not enough, rather
+  // than surprising the user with a permission popup on page load.
+  const restoreFolderHandle = useCallback(async (username) => {
+    if (!username) return;
+    let handle;
+    try {
+      handle = await getFolderHandleForUser(username);
+    } catch {
+      return;
+    }
+    if (!handle) return;
+
+    try {
+      const queryPerm = await handle.queryPermission({ mode: "readwrite" });
+      if (queryPerm === "granted") {
+        dirHandleRef.current = handle;
+        setFolderName(handle.name);
+        localStorage.setItem("tps_folder_name", handle.name);
+        showToast(`📁 Reconnected: ${handle.name}`);
+        return;
+      }
+    } catch {
+      return; // handle no longer usable (e.g. folder deleted) — ignore
+    }
+
+    // Permission needs re-confirming. Store the handle for a manual
+    // "Reconnect Folder" action in Settings rather than prompting
+    // unsolicited — see the folderNeedsReconnect flag used in SettingsSheet.
+    dirHandleRef.current = handle;
+    setFolderName(handle.name);
+    setFolderNeedsReconnect(true);
   }, []);
+
+  // Attempt to restore a remembered folder for this username once, whenever
+  // the username changes (covers both: returning with a saved username
+  // already in localStorage on first render, and right after picking a
+  // flight plan by a freshly-typed username).
+  useEffect(() => {
+    const username = simbriefUsername.trim();
+    if (username) restoreFolderHandle(username);
+  }, [simbriefUsername, restoreFolderHandle]);
+
+  const handleReconnectFolder = useCallback(async () => {
+    if (!dirHandleRef.current) return;
+    try {
+      const perm = await dirHandleRef.current.requestPermission({ mode: "readwrite" });
+      if (perm === "granted") {
+        setFolderNeedsReconnect(false);
+        setAutoSave(true);
+        showToast(`📁 Reconnected: ${folderName}`);
+      } else {
+        showToast("Permission denied");
+      }
+    } catch {
+      showToast("Could not reconnect folder");
+    }
+  }, [folderName]);
 
   async function saveFile(content, filename) {
     if (autoSave && dirHandleRef.current) {
@@ -708,7 +996,7 @@ export default function App() {
           <div className="panels">
             {activeTab === "tps"
               ? <TpsPanel      xmlData={xmlData} onGenerate={handleGenerate} generating={generating} />
-              : <CloseoutPanel xmlData={xmlData} onGenerate={handleGenerate} generating={generating} />
+              : <CloseoutPanel xmlData={xmlData} onGenerate={handleGenerate} generating={generating} dirHandleRef={dirHandleRef} />
             }
             <div className="preview-panel">
               {genError && (
@@ -763,6 +1051,10 @@ export default function App() {
           onClearFolder={handleClearFolder}
           autoSave={autoSave}
           onAutoSaveChange={setAutoSave}
+          folderNeedsReconnect={folderNeedsReconnect}
+          onReconnectFolder={handleReconnectFolder}
+          simbriefUsername={simbriefUsername}
+          dirHandleRef={dirHandleRef}
         />
       )}
     </>
