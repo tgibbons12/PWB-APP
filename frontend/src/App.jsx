@@ -99,6 +99,17 @@ async function apiFlightplan(rawXml) {
   return data;
 }
 
+async function apiFlightplanBySimbrief(username) {
+  const res = await fetch(`${API_BASE}/api/flightplan/simbrief`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(data.error || "Failed to fetch flight plan from SimBrief.", data.detail);
+  return data;
+}
+
 async function apiGenerate(payload) {
   const res = await fetch(`${API_BASE}/api/generate`, {
     method: "POST",
@@ -430,6 +441,10 @@ export default function App() {
   // correctly-formatted but meaningless TPS/closeout.
   const [xmlData, setXmlData]       = useState(null);
   const [xmlInput, setXmlInput]     = useState("");
+  const [simbriefUsername, setSimbriefUsername] = useState(
+    () => localStorage.getItem("tps_simbrief_username") || ""
+  );
+  const [showPasteXml, setShowPasteXml] = useState(false);
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [planError, setPlanError]   = useState(null);
 
@@ -456,6 +471,22 @@ export default function App() {
     try {
       const data = await apiFlightplan(xmlInput);
       setXmlData(data);
+    } catch (e) {
+      setPlanError(e instanceof ApiError ? e.message : "Could not reach the server.");
+    } finally {
+      setLoadingPlan(false);
+    }
+  }
+
+  async function handleLoadFromSimbrief() {
+    const username = simbriefUsername.trim();
+    if (!username) return;
+    setLoadingPlan(true);
+    setPlanError(null);
+    try {
+      const data = await apiFlightplanBySimbrief(username);
+      setXmlData(data);
+      localStorage.setItem("tps_simbrief_username", username);
     } catch (e) {
       setPlanError(e instanceof ApiError ? e.message : "Could not reach the server.");
     } finally {
@@ -560,16 +591,19 @@ export default function App() {
             </div>
             <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12, flex: 1, minHeight: 0 }}>
               <span className="lbl-muted" style={{ textAlign: "left" }}>
-                Paste the raw SimBrief XML for this flight below.
+                Enter your SimBrief username to pull your latest OFP.
               </span>
-              <textarea
-                value={xmlInput}
-                onChange={e => setXmlInput(e.target.value)}
-                placeholder="<OFP>...</OFP>"
+              <input
+                type="text"
+                value={simbriefUsername}
+                onChange={e => setSimbriefUsername(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") handleLoadFromSimbrief(); }}
+                placeholder="SimBrief username"
+                autoCapitalize="off"
+                autoCorrect="off"
                 style={{
-                  flex: 1, minHeight: 0, fontFamily: '"SF Mono","Courier New",monospace',
-                  fontSize: 12, padding: 10, borderRadius: 10, border: "1px solid #d0d0d5",
-                  resize: "none",
+                  fontFamily: '"SF Mono","Courier New",monospace',
+                  fontSize: 14, padding: 10, borderRadius: 10, border: "1px solid #d0d0d5",
                 }}
               />
               {planError && (
@@ -577,12 +611,45 @@ export default function App() {
               )}
               <button
                 className="gen-btn"
-                onClick={handleLoadFlightplan}
-                disabled={loadingPlan || !xmlInput.trim()}
+                onClick={handleLoadFromSimbrief}
+                disabled={loadingPlan || !simbriefUsername.trim()}
                 style={{ alignSelf: "flex-start" }}
               >
                 {loadingPlan ? "Loading…" : "▶  Load Flight Plan"}
               </button>
+
+              <button
+                onClick={() => setShowPasteXml(v => !v)}
+                style={{
+                  alignSelf: "flex-start", background: "none", border: "none",
+                  color: "#578E48", fontSize: 12, cursor: "pointer", padding: 0, marginTop: 8,
+                }}
+              >
+                {showPasteXml ? "▲ Hide manual XML paste" : "Paste raw XML instead ▾"}
+              </button>
+
+              {showPasteXml && (
+                <>
+                  <textarea
+                    value={xmlInput}
+                    onChange={e => setXmlInput(e.target.value)}
+                    placeholder="<OFP>...</OFP>"
+                    style={{
+                      flex: 1, minHeight: 120, fontFamily: '"SF Mono","Courier New",monospace',
+                      fontSize: 12, padding: 10, borderRadius: 10, border: "1px solid #d0d0d5",
+                      resize: "none",
+                    }}
+                  />
+                  <button
+                    className="gen-btn"
+                    onClick={handleLoadFlightplan}
+                    disabled={loadingPlan || !xmlInput.trim()}
+                    style={{ alignSelf: "flex-start" }}
+                  >
+                    {loadingPlan ? "Loading…" : "▶  Load From Pasted XML"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

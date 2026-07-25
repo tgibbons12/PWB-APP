@@ -117,6 +117,34 @@ def health():
     return jsonify({"status": "ok"})
 
 
+def _parse_and_respond(xml_root, aircraft_type, date):
+    """
+    Shared tail end of both /api/flightplan and /api/flightplan/simbrief —
+    takes an already-parsed ET.Element tree root and does the
+    parse_xml_raw() + intersections + validation steps identically for
+    either source (pasted XML or SimBrief-fetched XML), so the two routes
+    can't drift in behavior.
+    """
+    try:
+        xml_data = core.parse_xml_raw(xml_root, date, aircraft_type)
+    except Exception as e:
+        # parse_xml_raw is a big function with many XML .find() calls that
+        # assume certain elements exist; a malformed-but-valid-XML file
+        # (e.g. missing <weights>) can still throw here. Surface it plainly
+        # rather than a bare 500.
+        return _error(
+            "Failed to extract flight data from XML.",
+            status=422,
+            detail=f"{type(e).__name__}: {e}",
+        )
+
+    if not xml_data["valid_runways"]:
+        return _error("No valid runway data found in XML.", status=422)
+
+    xml_data["intersections"] = _build_intersections(xml_data)
+    return jsonify(xml_data)
+
+
 @app.route("/api/flightplan", methods=["POST"])
 def flightplan():
     """
@@ -136,24 +164,40 @@ def flightplan():
     aircraft_type = request.args.get("aircraft_type", "B738")
     date = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
 
-    try:
-        xml_data = core.parse_xml_raw(xml_root, date, aircraft_type)
-    except Exception as e:
-        # parse_xml_raw is a big function with many XML .find() calls that
-        # assume certain elements exist; a malformed-but-valid-XML file
-        # (e.g. missing <weights>) can still throw here. Surface it plainly
-        # rather than a bare 500.
+    return _parse_and_respond(xml_root, aircraft_type, date)
+
+
+@app.route("/api/flightplan/simbrief", methods=["POST"])
+def flightplan_simbrief():
+    """
+    Accepts { "username": "<simbrief username>" } and fetches that pilot's
+    most recent OFP directly from SimBrief's public XML API server-side —
+    no XML pasting required. Wraps core.fetch_xml_from_api(), which already
+    existed for this exact purpose but was never wired to a route.
+
+    SimBrief's xml.fetcher.php endpoint is public and keyed only by
+    username (this is the same mechanism EFB/plugin integrations like
+    this one have always used) — there is no OAuth/login step to build.
+    """
+    body = request.get_json(silent=True) or {}
+    username = (body.get("username") or "").strip()
+    if not username:
+        return _error("Missing 'username' — provide the pilot's SimBrief username.")
+
+    xml_tree = core.fetch_xml_from_api(username)
+    if xml_tree is None:
         return _error(
-            "Failed to extract flight data from XML.",
+            "Could not fetch a flight plan from SimBrief for that username.",
             status=422,
-            detail=f"{type(e).__name__}: {e}",
+            detail="No OFP found, the username may be wrong, or SimBrief's API did not respond.",
         )
 
-    if not xml_data["valid_runways"]:
-        return _error("No valid runway data found in XML.", status=422)
+    xml_root = xml_tree.getroot()
 
-    xml_data["intersections"] = _build_intersections(xml_data)
-    return jsonify(xml_data)
+    aircraft_type = body.get("aircraft_type", "B738")
+    date = body.get("date", datetime.now().strftime("%Y-%m-%d"))
+
+    return _parse_and_respond(xml_root, aircraft_type, date)
 
 
 @app.route("/api/generate", methods=["POST"])
