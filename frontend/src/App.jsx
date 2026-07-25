@@ -41,11 +41,15 @@ const css = `
   .ro-val-green { font-size: 12px; font-weight: 600; color: #578E48; font-family: "SF Mono","Courier New",monospace; }
   .ro-val-red   { font-size: 12px; font-weight: 600; color: #c0392b; font-family: "SF Mono","Courier New",monospace; }
   .preview-panel { background: #ffffff; font-family: "SF Mono","Courier New",monospace; font-size: 11.5px; line-height: 1.55; color: #000; padding: 10px 14px; overflow-y: auto; white-space: pre; border: 1px solid #d0d0d5; border-radius: 10px; min-height: 0; }
+  .fullscreen-preview-backdrop { position: fixed; inset: 0; background: #2c2c2e; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 48px; }
+  .fullscreen-preview-frame { background: #ffffff; border-radius: 14px; width: 100%; height: 100%; max-width: 900px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 8px 40px rgba(0,0,0,0.4); }
+  .fullscreen-preview-text { flex: 1; overflow-y: auto; font-family: "SF Mono","Courier New",monospace; font-size: 15px; line-height: 1.6; color: #000; white-space: pre; padding: 28px 32px; }
+  .fullscreen-preview-close { align-self: center; margin: 0 0 18px; background: #3a3a3c; color: #fff; border: none; border-radius: 9px; font-size: 14px; font-weight: 600; font-family: inherit; padding: 9px 22px; cursor: pointer; }
   .gen-btn { background: #578E48; color: #fff; border: none; border-radius: 9px; font-size: 14px; font-weight: 600; font-family: inherit; padding: 9px 22px; cursor: pointer; }
   .gen-btn:active { opacity: 0.85; }
   .sec-btn { background: none; border: 1px solid rgba(0,0,0,0.18); border-radius: 9px; font-size: 13px; font-family: inherit; padding: 8px 14px; cursor: pointer; color: #007aff; }
   .sec-btn:active { background: rgba(0,0,0,0.05); }
-  .gen-btn-row { display: flex; gap: 8px; align-items: center; padding: 10px 0 2px; justify-content: center; }
+  .gen-btn-row { display: flex; gap: 8px; align-items: center; padding: 10px 0 2px; justify-content: center; position: sticky; bottom: 0; background: #ffffff; border-top: 1px solid #eee; margin-top: 8px; z-index: 2; }
   .bottom-bar { background: #ffffff; border-top: 1px solid #c6c6c8; margin: 0 8px 8px; border-radius: 0 0 8px 8px; padding: 8px 16px 10px; display: flex; align-items: center; justify-content: center; gap: 24px; flex-shrink: 0; }
   .bot-btn { background: none; border: none; color: #007aff; font-size: 14px; font-family: inherit; cursor: pointer; }
   .bot-btn:active { opacity: 0.5; }
@@ -84,9 +88,22 @@ const css = `
 `;
 
 // ─── API ──────────────────────────────────────────────────────────────────────
-// Set VITE_API_BASE at build time (e.g. in Railway's frontend service env vars)
-// to point at the deployed backend. Falls back to localhost for local dev.
+// Two backends, two different jobs:
+//
+// API_BASE (Railway) handles TPS generation and SimBrief fetch — anything
+// that needs to be reachable from any device (iPad, phone, etc) anywhere.
+//
+// CLOSEOUT_API_BASE is a Flask instance running LOCALLY on the ops machine
+// (the same Mac that has the ACARS oooi_log.txt folder and the printer's
+// watched folder). Closeout generation needs real filesystem access to
+// read oooi_log.txt and write the output where the ACARS printer picks it
+// up — that's not something a cloud server can ever do, regardless of any
+// browser-side workaround, since the folder physically only exists on that
+// one Mac. This is set separately (not just localhost) because the iPad
+// reaches it over the local network by the Mac's LAN IP, not "localhost"
+// (localhost from the iPad's browser means the iPad itself).
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
+const CLOSEOUT_API_BASE = import.meta.env.VITE_CLOSEOUT_API_BASE || API_BASE;
 
 async function apiFlightplan(rawXml) {
   const res = await fetch(`${API_BASE}/api/flightplan`, {
@@ -110,7 +127,7 @@ async function apiFlightplanBySimbrief(username) {
   return data;
 }
 
-async function apiGenerate(payload) {
+async function apiGenerateTps(payload) {
   const res = await fetch(`${API_BASE}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -118,6 +135,43 @@ async function apiGenerate(payload) {
   });
   const data = await res.json();
   if (!res.ok) throw new ApiError(data.error || "Generation failed.", data.detail);
+  return data;
+}
+
+async function apiGenerateCloseout(payload) {
+  let res;
+  try {
+    res = await fetch(`${CLOSEOUT_API_BASE}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    // Distinct message from a generic network failure — this almost always
+    // means the local closeout backend isn't running on this Mac, or the
+    // iPad/device isn't on the same network as it.
+    throw new ApiError(
+      "Could not reach the closeout server.",
+      `Checked ${CLOSEOUT_API_BASE} — make sure the local closeout app is running and this device is on the same network.`
+    );
+  }
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(data.error || "Closeout generation failed.", data.detail);
+  return data;
+}
+
+async function apiOooiStatus() {
+  let res;
+  try {
+    res = await fetch(`${CLOSEOUT_API_BASE}/api/oooi/status`);
+  } catch (e) {
+    throw new ApiError(
+      "Could not reach the closeout server.",
+      `Checked ${CLOSEOUT_API_BASE} — make sure the local closeout app is running and this device is on the same network.`
+    );
+  }
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(data.error || "Failed to check OOOI status.", data.detail);
   return data;
 }
 
@@ -203,6 +257,26 @@ async function clearFolderHandleForUser(username) {
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
   });
+}
+
+// Forces a real "Save As" / download action rather than letting the browser
+// open the file inline. text/plain is NOT reliable for this — Safari on iOS
+// and some Android browsers will preview a text/plain blob in a new tab
+// instead of downloading it, even with the `download` attribute set.
+// application/octet-stream tells the browser "unknown binary, don't try to
+// render this" which is what actually forces the save dialog everywhere.
+function forceDownloadTxt(content, filename) {
+  const blob = new Blob([content], { type: "application/octet-stream" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url;
+  a.download = filename || "output.txt";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Free the blob URL shortly after — some browsers cancel the download if
+  // revoked immediately/synchronously, so this waits a tick.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 class ApiError extends Error {
@@ -373,16 +447,24 @@ function TpsPanel({ xmlData, onGenerate, generating }) {
 }
 
 // ─── CLOSEOUT LEFT PANEL ──────────────────────────────────────────────────────
-function CloseoutPanel({ xmlData, onGenerate, generating, dirHandleRef, ensureFolderPermission }) {
+function CloseoutPanel({ xmlData, onGenerate, generating }) {
+  // Manual-entry fields — start pre-filled from the flight plan as sane
+  // defaults, but stay HIDDEN until CLOSEOUT REQUEST is pressed and no
+  // OOOI data is found. Pax/cargo always come from the flight plan either
+  // way (OOOI only ever reports fuel + ZFW, never pax/cargo) — those two
+  // fields are shown in manual mode purely so the pilot can correct them
+  // if the loadsheet changed after dispatch, not because OOOI would have
+  // filled them.
   const [pax, setPax]       = useState(String(xmlData.pax_count_xml));
   const [cargo, setCargo]   = useState(String(xmlData.cargo_xml));
   const [ramp, setRamp]     = useState(String(xmlData.plan_ramp_xml));
   const [cg, setCg]         = useState("25.0");
   const [zfwOverride, setZfwOverride]       = useState(false);
   const [zfwOverrideVal, setZfwOverrideVal] = useState("");
-  const [oooiReading, setOooiReading] = useState(false);
-  const [oooiMsg, setOooiMsg]         = useState(null);
-  const [oooiMsgErr, setOooiMsgErr]   = useState(false);
+
+  const [phase, setPhase] = useState("idle"); // idle | checking | manual | done
+  const [statusMsg, setStatusMsg] = useState(null);
+  const [statusMsgErr, setStatusMsgErr] = useState(false);
 
   const paxN   = parseInt(pax)   || 0;
   const cargoN = parseInt(cargo) || 0;
@@ -396,79 +478,108 @@ function CloseoutPanel({ xmlData, onGenerate, generating, dirHandleRef, ensureFo
   const tow    = zfw + (rampN - xmlData.taxi_fuel);
   const atow   = tow + 2000;
   const zfwOver = zfw > xmlData.max_zfw;
-  const ptowK  = (tow  / 1000).toFixed(1);
-  const atowK  = (atow / 1000).toFixed(1);
-  const zfwK   = (zfw  / 1000).toFixed(1);
-  const fuelK  = ((rampN - xmlData.taxi_fuel) / 1000).toFixed(1);
 
-  // Reads oooi_log.txt from the SAME folder already granted for TPS/closeout
-  // auto-save (dirHandleRef) — this is the file the old desktop app used to
-  // read from a hardcoded local Dropbox path. On the server that path never
-  // existed, but the browser already has folder access, so it reads the
-  // file directly and sends just its text to /api/oooi/parse for parsing.
-  async function handleReadOooi() {
-    if (!dirHandleRef?.current) {
-      setOooiMsg("No save folder set — pick one in Settings first.");
-      setOooiMsgErr(true);
-      return;
-    }
-    setOooiReading(true);
-    setOooiMsg(null);
-    setOooiMsgErr(false);
-    // Same self-heal as saveFile: silently confirm (or, only if needed,
-    // re-request) folder permission before touching the handle, rather than
-    // letting a stale grant surface as a bare "could not read" error and
-    // sending the user to Settings → Reconnect for something recoverable
-    // right here.
-    const hasAccess = await ensureFolderPermission?.();
-    if (!hasAccess) {
-      setOooiMsg("Folder access lost — reconnect it in Settings.");
-      setOooiMsgErr(true);
-      setOooiReading(false);
-      return;
-    }
+  // Single entry point: CLOSEOUT REQUEST. Checks the local closeout
+  // backend for OOOI data first (only meaningful when that backend is
+  // actually running on the ops Mac with Dropbox/ACARS synced — see
+  // CLOSEOUT_API_BASE). Found → auto-fill fuel/ZFW from OOOI, pax/cargo
+  // from the flight plan, generate + save immediately, nothing shown to
+  // the pilot beyond a confirmation. Not found → reveal manual fields
+  // pre-filled from the flight plan so the pilot can adjust and submit.
+  async function handleCloseoutRequest() {
+    setPhase("checking");
+    setStatusMsg(null);
+    setStatusMsgErr(false);
     try {
-      const fileHandle = await dirHandleRef.current.getFileHandle("oooi_log.txt");
-      const file = await fileHandle.getFile();
-      const text = await file.text();
-      const result = await apiParseOooi(text);
-
-      if (result.total_fuel_lbs == null && result.zfw_lbs == null) {
-        setOooiMsg("oooi_log.txt found, but no fuel/ZFW data could be read from it.");
-        setOooiMsgErr(true);
-        return;
-      }
-
-      if (result.total_fuel_lbs != null) setRamp(String(Math.round(result.total_fuel_lbs)));
-      // OOOI doesn't report CG directly, only ZFW — used here only to flag
-      // a mismatch against the manually-entered value, not to overwrite CG.
-      const parts = [];
-      if (result.total_fuel_lbs != null) parts.push(`fuel ${Math.round(result.total_fuel_lbs).toLocaleString()} lbs`);
-      if (result.zfw_lbs != null) parts.push(`ZFW ${Math.round(result.zfw_lbs).toLocaleString()} lbs`);
-      if (result.off_block) parts.push(`off-block ${result.off_block}`);
-      setOooiMsg(`✓ Loaded from OOOI log: ${parts.join(", ")}`);
-      setOooiMsgErr(false);
-    } catch (e) {
-      if (e.name === "NotFoundError") {
-        setOooiMsg("oooi_log.txt not found in the save folder.");
+      const oooi = await apiOooiStatus();
+      if (oooi.found) {
+        const oooiRamp = oooi.total_fuel_lbs != null ? String(Math.round(oooi.total_fuel_lbs)) : ramp;
+        setRamp(oooiRamp);
+        await submitCloseout({ pax, cargo, ramp: oooiRamp, cg, zfwOverride, zfwOverrideVal });
+        const parts = [];
+        if (oooi.total_fuel_lbs != null) parts.push(`fuel ${Math.round(oooi.total_fuel_lbs).toLocaleString()} lbs`);
+        if (oooi.zfw_lbs != null) parts.push(`ZFW ${Math.round(oooi.zfw_lbs).toLocaleString()} lbs`);
+        setStatusMsg(`✓ Closeout generated from OOOI (${parts.join(", ")}) and saved.`);
+        setStatusMsgErr(false);
+        setPhase("done");
       } else {
-        setOooiMsg(e instanceof ApiError ? e.message : "Could not read the OOOI log.");
+        setStatusMsg("No OOOI data found yet — enter values manually below.");
+        setStatusMsgErr(false);
+        setPhase("manual");
       }
-      setOooiMsgErr(true);
-    } finally {
-      setOooiReading(false);
+    } catch (e) {
+      // Local closeout backend unreachable (not running, or this device
+      // isn't on the same network as the ops Mac) — fall back to manual
+      // entry rather than blocking the pilot from generating a closeout.
+      setStatusMsg(e instanceof ApiError ? `${e.message} Enter values manually below.` : "Could not check OOOI — enter values manually below.");
+      setStatusMsgErr(true);
+      setPhase("manual");
     }
   }
 
-  function handleGenerateClick() {
-    onGenerate("closeout", {
-      pax, cargo, ramp, cg, zfwOverride, zfwOverrideVal,
-    });
+  async function submitCloseout(formValues) {
+    await onGenerate("closeout", formValues);
   }
 
+  async function handleManualSubmit() {
+    setPhase("checking");
+    try {
+      await submitCloseout({ pax, cargo, ramp, cg, zfwOverride, zfwOverrideVal });
+      setStatusMsg("✓ Closeout generated and saved.");
+      setStatusMsgErr(false);
+      setPhase("done");
+    } catch (e) {
+      setStatusMsg(e instanceof ApiError ? e.message : "Closeout generation failed.");
+      setStatusMsgErr(true);
+      setPhase("manual");
+    }
+  }
+
+  if (phase === "idle" || phase === "checking" || phase === "done") {
+    return (
+      <div className="panel">
+        <div className="srow"><div className="lbl">Closeout</div></div>
+        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12, alignItems: "flex-start" }}>
+          <span className="lbl-muted" style={{ textAlign: "left" }}>
+            Checks for an OOOI message automatically. If found, the closeout
+            generates and saves without any manual entry. If not found,
+            you'll be asked to fill in pax/cargo/fuel/CG yourself.
+          </span>
+          <button
+            className="gen-btn"
+            onClick={handleCloseoutRequest}
+            disabled={phase === "checking" || generating}
+          >
+            {phase === "checking" ? "Checking…" : "▶  CLOSEOUT REQUEST"}
+          </button>
+          {statusMsg && (
+            <span style={{ fontSize: 13, color: statusMsgErr ? "#c0392b" : "#578E48", whiteSpace: "pre-wrap" }}>
+              {statusMsg}
+            </span>
+          )}
+          {phase === "done" && (
+            <button
+              className="sheet-action-btn"
+              onClick={() => { setPhase("idle"); setStatusMsg(null); }}
+            >
+              Request Again
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // phase === "manual" — OOOI wasn't found (or the local backend wasn't
+  // reachable), so fall back to the full manual entry form.
   return (
     <div className="panel">
       <div className="srow"><div className="lbl">Closeout — Passengers, Cargo &amp; Fuel</div></div>
+      {statusMsg && (
+        <div className="srow">
+          <span style={{ fontSize: 12, color: statusMsgErr ? "#c0392b" : "#8e8e93" }}>{statusMsg}</span>
+        </div>
+      )}
 
       {[
         ["Passenger Count",          pax,   setPax,   "numeric"],
@@ -503,44 +614,13 @@ function CloseoutPanel({ xmlData, onGenerate, generating, dirHandleRef, ensureFo
         </div>
       </div>
 
-      {/* OOOI auto-fill — reads oooi_log.txt from the same save folder used for TPS/closeout output */}
       <div className="srow">
         <button
-          className="sheet-action-btn"
-          onClick={handleReadOooi}
-          disabled={oooiReading || !dirHandleRef?.current}
-          style={{ alignSelf: "flex-start", opacity: dirHandleRef?.current ? 1 : 0.5 }}
+          className="gen-btn"
+          onClick={handleManualSubmit}
+          disabled={phase === "checking" || generating}
         >
-          {oooiReading ? "Reading…" : "⛽ Auto-fill fuel from OOOI log"}
-        </button>
-        {!dirHandleRef?.current && (
-          <span className="sheet-hint" style={{ display: "block", marginTop: 4 }}>
-            Set a save folder in Settings first — OOOI reads oooi_log.txt from that same folder.
-          </span>
-        )}
-        {oooiMsg && (
-          <span className="sheet-hint" style={{ display: "block", marginTop: 4, color: oooiMsgErr ? "#c0392b" : "#578E48" }}>
-            {oooiMsg}
-          </span>
-        )}
-      </div>
-
-      {/* Computed summary — muted */}
-      <div className="srow">
-        <div className="lbl-muted">Weight Summary</div>
-        <div style={{ width: "100%" }}>
-          {[["PTOW (klbs)", ptowK], ["ATOW (klbs)", atowK], ["ZFW  (klbs)", zfwK], ["Fuel (klbs)", `${fuelK}P`]].map(([l, v]) => (
-            <div key={l} className="field-row">
-              <span className="field-lbl-muted">{l}</span>
-              <span className="ro-val-muted">{v}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="gen-btn-row">
-        <button className="gen-btn" onClick={handleGenerateClick} disabled={generating}>
-          {generating ? "Generating…" : "▶  Generate Closeout"}
+          {phase === "checking" ? "Generating…" : "▶  Generate Closeout"}
         </button>
       </div>
     </div>
@@ -548,7 +628,7 @@ function CloseoutPanel({ xmlData, onGenerate, generating, dirHandleRef, ensureFo
 }
 
 // ─── SETTINGS SHEET ───────────────────────────────────────────────────────────
-function SettingsSheet({ onClose, folderName, onPickFolder, onClearFolder, autoSave, onAutoSaveChange, folderNeedsReconnect, onReconnectFolder }) {
+function SettingsSheet({ onClose, folderName, onPickFolder, onClearFolder, autoSave, onAutoSaveChange, folderNeedsReconnect, onReconnectFolder, closeoutEnabled, onCloseoutEnabledChange }) {
   const supported = typeof window !== "undefined" && "showDirectoryPicker" in window;
 
   const [rwyStatus, setRwyStatus]   = useState(null);
@@ -588,6 +668,18 @@ function SettingsSheet({ onClose, folderName, onPickFolder, onClearFolder, autoS
       <div className="sheet">
         <div className="sheet-handle" />
         <div className="sheet-title">Settings</div>
+        <div className="sheet-section">
+          <div className="sheet-row">
+            <span className="sheet-row-lbl">Closeout Tab</span>
+            <Toggle checked={closeoutEnabled} onChange={onCloseoutEnabledChange} />
+          </div>
+          <div className="sheet-row">
+            <span className="sheet-hint">
+              Off hides the Closeout tab from the tab bar. Turn it on when the local
+              closeout backend is set up and reachable for this device.
+            </span>
+          </div>
+        </div>
         <div className="sheet-section">
           <div className="sheet-row">
             <span className="sheet-row-lbl">Auto-save on Generate</span>
@@ -681,7 +773,6 @@ export default function App() {
 
   const [activeTab, setActiveTab]   = useState("tps");
   const [tpsPreview, setTpsPreview]             = useState("");
-  const [closeoutPreview, setCloseoutPreview]   = useState("");
   const [tpsFilename, setTpsFilename]           = useState("");
   const [closeoutFilename, setCloseoutFilename] = useState("");
   const [tpsGenerated, setTpsGenerated]         = useState(false);
@@ -691,10 +782,35 @@ export default function App() {
   const [toastMsg, setToastMsg]     = useState("");
   const [toastOn, setToastOn]       = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [fullscreenPreview, setFullscreenPreview] = useState(false);
+  const [closeoutEnabled, setCloseoutEnabled] = useState(
+    () => localStorage.getItem("tps_closeout_enabled") !== "false" // default ON
+  );
+
+  function handleCloseoutEnabledChange(v) {
+    setCloseoutEnabled(v);
+    localStorage.setItem("tps_closeout_enabled", v ? "true" : "false");
+    if (!v && activeTab === "closeout") setActiveTab("tps");
+  }
   const [autoSave, setAutoSave]     = useState(false);
   const [folderName, setFolderName] = useState(() => localStorage.getItem("tps_folder_name") || "");
   const [folderNeedsReconnect, setFolderNeedsReconnect] = useState(false);
   const dirHandleRef                = useRef(null);
+  // iPad Safari's touch double-tap doesn't reliably fire the browser's
+  // native onDoubleClick — that event is built for mouse/trackpad. This
+  // does manual timing-based double-tap detection so the fullscreen
+  // preview gesture actually works on the iPad, not just desktop testing.
+  const lastTapRef = useRef(0);
+  function handlePreviewTap() {
+    const now = Date.now();
+    if (now - lastTapRef.current < 350) {
+      if (preview) setFullscreenPreview(true);
+      lastTapRef.current = 0;
+    } else {
+      lastTapRef.current = now;
+    }
+  }
+
 
   async function handleLoadFlightplan() {
     if (!xmlInput.trim()) return;
@@ -823,28 +939,8 @@ export default function App() {
     }
   }, [folderName]);
 
-  // Confirms the remembered folder handle can actually be used before an
-  // operation touches it. queryPermission() is silent — never shows any UI,
-  // just answers "granted" | "denied" | "prompt". Only when that comes back
-  // NOT granted do we fall to requestPermission(), which is the one case
-  // that can surface a browser permission prompt. Both saveFile and
-  // handleReadOooi call this same helper, so a save and a read recover from
-  // a stale grant (browser restart, long gap, etc.) the exact same way
-  // instead of only writes self-healing and reads dead-ending in an error.
-  async function ensureFolderPermission() {
-    if (!dirHandleRef.current) return false;
-    try {
-      const state = await dirHandleRef.current.queryPermission({ mode: "readwrite" });
-      if (state === "granted") return true;
-      const requested = await dirHandleRef.current.requestPermission({ mode: "readwrite" });
-      return requested === "granted";
-    } catch {
-      return false;
-    }
-  }
-
   async function saveFile(content, filename) {
-    if (autoSave && dirHandleRef.current && await ensureFolderPermission()) {
+    if (autoSave && dirHandleRef.current) {
       try {
         const fh = await dirHandleRef.current.getFileHandle(filename, { create: true });
         const w  = await fh.createWritable();
@@ -852,12 +948,14 @@ export default function App() {
         showToast(`✓ Saved → ${folderName}/${filename}`);
         return;
       } catch {
+        try {
+          const perm = await dirHandleRef.current.requestPermission({ mode: "readwrite" });
+          if (perm === "granted") { await saveFile(content, filename); return; }
+        } catch {}
         showToast("⚠ Folder access lost — downloaded instead");
       }
     }
-    const blob = new Blob([content], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+    forceDownloadTxt(content, filename);
     if (!autoSave) showToast("⬇ Downloaded");
   }
 
@@ -865,59 +963,53 @@ export default function App() {
     setGenerating(true);
     setGenError(null);
     try {
-      const result = await apiGenerate({ xml_data: xmlData, mode: type, ...formValues });
-
-      if (result.tps) {
-        setTpsPreview(result.tps.content);
-        setTpsFilename(result.tps.filename);
-        setTpsGenerated(true);
-        // Auto-save to a chosen folder is an explicit opt-in (autoSave toggle,
-        // File System Access API) — that still fires here. A plain browser
-        // download does NOT fire here; it only fires when the user presses
-        // the Download button (handleManualDownload below), after reviewing
-        // the preview.
-        if (autoSave && dirHandleRef.current) {
-          await saveFile(result.tps.content, result.tps.filename);
+      if (type === "tps") {
+        const result = await apiGenerateTps({ xml_data: xmlData, mode: "tps", ...formValues });
+        if (result.tps) {
+          setTpsPreview(result.tps.content);
+          setTpsFilename(result.tps.filename);
+          setTpsGenerated(true);
+          // Auto-save to a chosen folder is an explicit opt-in (autoSave
+          // toggle, File System Access API) — that still fires here. A plain
+          // browser download does NOT fire here; it only fires when the user
+          // presses the Download button (handleManualDownload below), after
+          // reviewing the preview.
+          if (autoSave && dirHandleRef.current) {
+            await saveFile(result.tps.content, result.tps.filename);
+          }
         }
-      }
-      if (result.closeout) {
-        // Closeout is entry-only, not preview-then-download like TPS: the
-        // panel just collects pax/cargo/ramp/cg inputs, and pressing Generate
-        // should hand back a finished file immediately rather than showing
-        // the raw closeout text on screen first. Still respects autoSave
-        // (goes to the chosen folder instead of triggering a browser download
-        // dialog) the same way TPS does.
-        setCloseoutFilename(result.closeout.filename);
-        setCloseoutGenerated(true);
-        if (autoSave && dirHandleRef.current) {
-          await saveFile(result.closeout.content, result.closeout.filename);
-        } else {
-          const blob = new Blob([result.closeout.content], { type: "text/plain" });
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(blob); a.download = result.closeout.filename; a.click();
-          showToast("⬇ Downloaded");
+      } else {
+        // Closeout hits the LOCAL backend (CLOSEOUT_API_BASE), which runs
+        // directly on the ops Mac with real filesystem access — it writes
+        // the closeout straight to OUTPUT_DIR (configured to be the ACARS
+        // print-watch folder) itself. There is nothing for the browser to
+        // download or save here; the file already landed where it needs to
+        // be the moment this call succeeds. This is what makes "generate
+        // and save to a folder for printing, without showing the file"
+        // actually possible — a cloud server (Railway) could never write to
+        // that folder, only a process running on the same Mac can.
+        const result = await apiGenerateCloseout({ xml_data: xmlData, mode: "closeout", ...formValues });
+        if (result.closeout) {
+          setCloseoutFilename(result.closeout.filename);
+          setCloseoutGenerated(true);
         }
       }
     } catch (e) {
       setGenError(e instanceof ApiError ? e.message : "Could not reach the server.");
       showToast("⚠ Generation failed");
+      throw e; // let CloseoutPanel's CLOSEOUT REQUEST flow react (fall back to manual entry)
     } finally {
       setGenerating(false);
     }
   }
 
   function handleManualDownload() {
-    const isTps    = activeTab === "tps";
-    const content  = isTps ? tpsPreview : closeoutPreview;
-    const filename = isTps ? tpsFilename : closeoutFilename;
-    if (!content) return;
-    const blob = new Blob([content], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = filename || "output.txt"; a.click();
+    if (!tpsPreview) return;
+    forceDownloadTxt(tpsPreview, tpsFilename);
     showToast("⬇ Downloaded");
   }
 
-  const preview   = activeTab === "tps" ? tpsPreview : closeoutPreview;
+  const preview   = tpsPreview;
   const generated = activeTab === "tps" ? tpsGenerated : closeoutGenerated;
 
   // ── No flight plan loaded yet: show the input screen instead of the panels ──
@@ -1024,26 +1116,37 @@ export default function App() {
           <div className="panels">
             {activeTab === "tps"
               ? <TpsPanel      xmlData={xmlData} onGenerate={handleGenerate} generating={generating} />
-              : <CloseoutPanel xmlData={xmlData} onGenerate={handleGenerate} generating={generating} dirHandleRef={dirHandleRef} ensureFolderPermission={ensureFolderPermission} />
+              : <CloseoutPanel xmlData={xmlData} onGenerate={handleGenerate} generating={generating} />
             }
-            <div className="preview-panel">
-              {genError && (
-                <div style={{ color: "#c0392b", marginBottom: 8, whiteSpace: "pre-wrap" }}>{genError}</div>
-              )}
-              {activeTab === "closeout"
-                ? (closeoutGenerated
-                    ? `✓ ${closeoutFilename} generated and downloaded.`
-                    : "Fill in the panel on the left and press Generate — the closeout will download automatically.")
-                : (preview || "Nothing generated yet — fill in the panel on the left and press Generate.")
-              }
-            </div>
+            {activeTab === "tps" && (
+              <div
+                className="preview-panel"
+                onDoubleClick={() => preview && setFullscreenPreview(true)}
+                onTouchEnd={handlePreviewTap}
+                style={{ cursor: preview ? "zoom-in" : "default" }}
+              >
+                {genError && (
+                  <div style={{ color: "#c0392b", marginBottom: 8, whiteSpace: "pre-wrap" }}>{genError}</div>
+                )}
+                {preview || "Nothing generated yet — fill in the panel on the left and press Generate."}
+              </div>
+            )}
           </div>
+
+          {fullscreenPreview && (
+            <div className="fullscreen-preview-backdrop" onDoubleClick={() => setFullscreenPreview(false)}>
+              <div className="fullscreen-preview-frame">
+                <div className="fullscreen-preview-text">{preview}</div>
+                <button className="fullscreen-preview-close" onClick={() => setFullscreenPreview(false)}>✕ Close</button>
+              </div>
+            </div>
+          )}
 
           {/* BOTTOM BAR */}
           <div className="bottom-bar">
             <button className="bot-btn" onClick={() => {
               if (activeTab === "tps") { setTpsPreview(""); setTpsGenerated(false); }
-              else { setCloseoutPreview(""); setCloseoutGenerated(false); }
+              else { setCloseoutGenerated(false); }
               setGenError(null);
             }}>Reset</button>
             <div className="bot-type">{xmlData.AC_name}</div>
@@ -1059,9 +1162,8 @@ export default function App() {
           {[
             { id: "tps",      label: "Normal"   },
             { id: "closeout", label: "Closeout" },
-          ].map(({ id, label }) => (
+          ].filter(t => t.id !== "closeout" || closeoutEnabled).map(({ id, label }) => (
             <button key={id} className="tab" onClick={() => setActiveTab(id)}>
-              <PlaneIcon active={activeTab === id} />
               <span className={`tab-lbl${activeTab === id ? " on" : ""}`}>{label}</span>
               {activeTab === id && <div className="tab-bar-indicator" />}
             </button>
@@ -1083,6 +1185,8 @@ export default function App() {
           onReconnectFolder={handleReconnectFolder}
           simbriefUsername={simbriefUsername}
           dirHandleRef={dirHandleRef}
+          closeoutEnabled={closeoutEnabled}
+          onCloseoutEnabledChange={handleCloseoutEnabledChange}
         />
       )}
     </>

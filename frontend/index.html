@@ -2,8 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Takeoff Performance System</title>
+
+    <!-- PWA manifest — lets the app be added to the iPad home screen as a
+         standalone app rather than staying a bookmarked Safari tab. This
+         matters for login persistence: iOS Safari's Intelligent Tracking
+         Prevention aggressively clears localStorage/IndexedDB for sites
+         opened as regular tabs (as short as 7 days of no visit), but data
+         for home-screen-installed PWAs is exempt from that eviction. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- iOS-specific home-screen behavior -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="TPS" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+
+    <!-- Android/Chrome home-screen theming -->
+    <meta name="theme-color" content="#1c1c1e" />
   </head>
   <body>
     <div id="root"></div>
