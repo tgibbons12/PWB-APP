@@ -373,7 +373,7 @@ function TpsPanel({ xmlData, onGenerate, generating }) {
 }
 
 // ─── CLOSEOUT LEFT PANEL ──────────────────────────────────────────────────────
-function CloseoutPanel({ xmlData, onGenerate, generating, dirHandleRef }) {
+function CloseoutPanel({ xmlData, onGenerate, generating, dirHandleRef, ensureFolderPermission }) {
   const [pax, setPax]       = useState(String(xmlData.pax_count_xml));
   const [cargo, setCargo]   = useState(String(xmlData.cargo_xml));
   const [ramp, setRamp]     = useState(String(xmlData.plan_ramp_xml));
@@ -415,6 +415,18 @@ function CloseoutPanel({ xmlData, onGenerate, generating, dirHandleRef }) {
     setOooiReading(true);
     setOooiMsg(null);
     setOooiMsgErr(false);
+    // Same self-heal as saveFile: silently confirm (or, only if needed,
+    // re-request) folder permission before touching the handle, rather than
+    // letting a stale grant surface as a bare "could not read" error and
+    // sending the user to Settings → Reconnect for something recoverable
+    // right here.
+    const hasAccess = await ensureFolderPermission?.();
+    if (!hasAccess) {
+      setOooiMsg("Folder access lost — reconnect it in Settings.");
+      setOooiMsgErr(true);
+      setOooiReading(false);
+      return;
+    }
     try {
       const fileHandle = await dirHandleRef.current.getFileHandle("oooi_log.txt");
       const file = await fileHandle.getFile();
@@ -811,8 +823,28 @@ export default function App() {
     }
   }, [folderName]);
 
+  // Confirms the remembered folder handle can actually be used before an
+  // operation touches it. queryPermission() is silent — never shows any UI,
+  // just answers "granted" | "denied" | "prompt". Only when that comes back
+  // NOT granted do we fall to requestPermission(), which is the one case
+  // that can surface a browser permission prompt. Both saveFile and
+  // handleReadOooi call this same helper, so a save and a read recover from
+  // a stale grant (browser restart, long gap, etc.) the exact same way
+  // instead of only writes self-healing and reads dead-ending in an error.
+  async function ensureFolderPermission() {
+    if (!dirHandleRef.current) return false;
+    try {
+      const state = await dirHandleRef.current.queryPermission({ mode: "readwrite" });
+      if (state === "granted") return true;
+      const requested = await dirHandleRef.current.requestPermission({ mode: "readwrite" });
+      return requested === "granted";
+    } catch {
+      return false;
+    }
+  }
+
   async function saveFile(content, filename) {
-    if (autoSave && dirHandleRef.current) {
+    if (autoSave && dirHandleRef.current && await ensureFolderPermission()) {
       try {
         const fh = await dirHandleRef.current.getFileHandle(filename, { create: true });
         const w  = await fh.createWritable();
@@ -820,10 +852,6 @@ export default function App() {
         showToast(`✓ Saved → ${folderName}/${filename}`);
         return;
       } catch {
-        try {
-          const perm = await dirHandleRef.current.requestPermission({ mode: "readwrite" });
-          if (perm === "granted") { await saveFile(content, filename); return; }
-        } catch {}
         showToast("⚠ Folder access lost — downloaded instead");
       }
     }
@@ -996,7 +1024,7 @@ export default function App() {
           <div className="panels">
             {activeTab === "tps"
               ? <TpsPanel      xmlData={xmlData} onGenerate={handleGenerate} generating={generating} />
-              : <CloseoutPanel xmlData={xmlData} onGenerate={handleGenerate} generating={generating} dirHandleRef={dirHandleRef} />
+              : <CloseoutPanel xmlData={xmlData} onGenerate={handleGenerate} generating={generating} dirHandleRef={dirHandleRef} ensureFolderPermission={ensureFolderPermission} />
             }
             <div className="preview-panel">
               {genError && (
