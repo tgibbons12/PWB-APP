@@ -163,7 +163,11 @@ function TpsPanel({ xmlData, onGenerate, generating }) {
   const [qnh, setQnh]                       = useState(xmlData.qnh);
   const [wind, setWind]                     = useState(xmlData.wind);
   const [antiIce, setAntiIce]               = useState(false);
-  const [runway, setRunway]                 = useState(xmlData.plan_rwy);
+  const [runway, setRunway]                 = useState(() => {
+    const planRwy = xmlData.plan_rwy;
+    const matches = xmlData.valid_runways.some(r => r.id === planRwy);
+    return matches ? planRwy : (xmlData.valid_runways[0]?.id ?? "");
+  });
   const [intersection, setIntersection]     = useState("FULL");
   const [speedOverrides, setSpeedOverrides] = useState({});
   const [forceMax, setForceMax]             = useState(false);
@@ -551,13 +555,32 @@ export default function App() {
         setTpsPreview(result.tps.content);
         setTpsFilename(result.tps.filename);
         setTpsGenerated(true);
-        await saveFile(result.tps.content, result.tps.filename);
+        // Auto-save to a chosen folder is an explicit opt-in (autoSave toggle,
+        // File System Access API) — that still fires here. A plain browser
+        // download does NOT fire here; it only fires when the user presses
+        // the Download button (handleManualDownload below), after reviewing
+        // the preview.
+        if (autoSave && dirHandleRef.current) {
+          await saveFile(result.tps.content, result.tps.filename);
+        }
       }
       if (result.closeout) {
-        setCloseoutPreview(result.closeout.content);
+        // Closeout is entry-only, not preview-then-download like TPS: the
+        // panel just collects pax/cargo/ramp/cg inputs, and pressing Generate
+        // should hand back a finished file immediately rather than showing
+        // the raw closeout text on screen first. Still respects autoSave
+        // (goes to the chosen folder instead of triggering a browser download
+        // dialog) the same way TPS does.
         setCloseoutFilename(result.closeout.filename);
         setCloseoutGenerated(true);
-        await saveFile(result.closeout.content, result.closeout.filename);
+        if (autoSave && dirHandleRef.current) {
+          await saveFile(result.closeout.content, result.closeout.filename);
+        } else {
+          const blob = new Blob([result.closeout.content], { type: "text/plain" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob); a.download = result.closeout.filename; a.click();
+          showToast("⬇ Downloaded");
+        }
       }
     } catch (e) {
       setGenError(e instanceof ApiError ? e.message : "Could not reach the server.");
@@ -571,9 +594,11 @@ export default function App() {
     const isTps    = activeTab === "tps";
     const content  = isTps ? tpsPreview : closeoutPreview;
     const filename = isTps ? tpsFilename : closeoutFilename;
+    if (!content) return;
     const blob = new Blob([content], { type: "text/plain" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = filename || "output.txt"; a.click();
+    showToast("⬇ Downloaded");
   }
 
   const preview   = activeTab === "tps" ? tpsPreview : closeoutPreview;
@@ -689,7 +714,12 @@ export default function App() {
               {genError && (
                 <div style={{ color: "#c0392b", marginBottom: 8, whiteSpace: "pre-wrap" }}>{genError}</div>
               )}
-              {preview || "Nothing generated yet — fill in the panel on the left and press Generate."}
+              {activeTab === "closeout"
+                ? (closeoutGenerated
+                    ? `✓ ${closeoutFilename} generated and downloaded.`
+                    : "Fill in the panel on the left and press Generate — the closeout will download automatically.")
+                : (preview || "Nothing generated yet — fill in the panel on the left and press Generate.")
+              }
             </div>
           </div>
 
@@ -701,7 +731,7 @@ export default function App() {
               setGenError(null);
             }}>Reset</button>
             <div className="bot-type">{xmlData.AC_name}</div>
-            {generated
+            {activeTab === "tps" && generated
               ? <button className="bot-btn" onClick={handleManualDownload}>Download</button>
               : <span style={{ fontSize: 14, color: "#8e8e93" }}>Audit</span>
             }
