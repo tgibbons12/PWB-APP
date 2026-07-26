@@ -294,10 +294,9 @@ export default function CduEmulator({
         {"ABCDEF".split("").map((ch, i) => (
           <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[0]}%`, left: `${ALPHA_COL_X[i]}%` }} onClick={() => appendChar(ch)} />
         ))}
-        {"GHIJK".split("").map((ch, i) => (
-          <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[1]}%`, left: `${ALPHA_COL_X[i + 1]}%` }} onClick={() => appendChar(ch)} />
+        {"GHIJKL".split("").map((ch, i) => (
+          <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[1]}%`, left: `${ALPHA_COL_X[i]}%` }} onClick={() => appendChar(ch)} />
         ))}
-        <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[1]}%`, left: `${ALPHA_COL_X[5]}%` }} onClick={() => appendChar("L")} />
         {"MNOPQR".split("").map((ch, i) => (
           <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[2]}%`, left: `${ALPHA_COL_X[i]}%` }} onClick={() => appendChar(ch)} />
         ))}
@@ -311,17 +310,17 @@ export default function CduEmulator({
         <button className="cdu-key cdu-key-wide" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${ALPHA_COL_X[4]}%` }} onClick={handleClr}>CLR</button>
 
         {["1", "2", "3", "+/-"].map((v, i) => (
-          <button key={v} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[0]}%`, left: `${NUM_COL_X[i]}%` }} onClick={() => appendChar(v === "+/-" ? "+/-" : v)} />
+          <button key={v} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[1]}%`, left: `${NUM_COL_X[i]}%` }} onClick={() => appendChar(v === "+/-" ? "+/-" : v)} />
         ))}
         {["4", "5", "6", "/"].map((v, i) => (
-          <button key={v} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[1]}%`, left: `${NUM_COL_X[i]}%` }} onClick={() => appendChar(v)} />
-        ))}
-        {["7", "8", "9"].map((v, i) => (
           <button key={v} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[2]}%`, left: `${NUM_COL_X[i]}%` }} onClick={() => appendChar(v)} />
         ))}
-        <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[3]}%`, left: `${NUM_COL_X[0]}%` }} onClick={() => appendChar(" ")} />
-        <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[3]}%`, left: `${NUM_COL_X[1]}%` }} onClick={() => appendChar("0")} />
-        <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[3]}%`, left: `${NUM_COL_X[2]}%` }} onClick={() => appendChar(".")} />
+        {["7", "8", "9"].map((v, i) => (
+          <button key={v} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[3]}%`, left: `${NUM_COL_X[i]}%` }} onClick={() => appendChar(v)} />
+        ))}
+        <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${NUM_COL_X[0]}%` }} onClick={() => appendChar(" ")} />
+        <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${NUM_COL_X[1]}%` }} onClick={() => appendChar("0")} />
+        <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${NUM_COL_X[2]}%` }} onClick={() => appendChar(".")} />
       </div>
     </div>
   );
