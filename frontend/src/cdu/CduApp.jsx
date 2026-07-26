@@ -17,10 +17,16 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 // Page flow (PREV/NEXT cycle through these once a flight plan is loaded):
 //   IDENT             — enter a SimBrief username, fetch + parse the OFP
 //   PERF TAKEOFF 1/2   — runway, intersection, TLR scenario, anti-ice, conditions
-//   PERF TAKEOFF 2/2   — V1/VR/V2/FLEX/FLAPS overrides, EXEC -> /api/generate
-//   PERF RESULT        — authoritative V1/VR/V2/FLAPS/FLEX/THR/ACC ALT/TR ALT/
-//                         TRIM/MRTW from the backend's runway_results (JSON,
-//                         not parsed out of the printed text)
+//   PERF TAKEOFF 2/2   — V1/VR/V2/FLEX/FLAPS overrides, EXEC/DLK -> /api/generate
+//   ACARS T/O RWY DATA — authentic 3-page ACARS report, modeled on the real
+//                         Honeywell AeroData "ACARS Takeoff Runway Data" pages
+//                         (ERJ-170 POH ch.9 sec.16):
+//                           1/3 loadsheet summary (FLT/RLS/TIME, WIND/OAT/QNH,
+//                               SECT A/B/C, GTOW/CG, ZFW/CG, TTL PAX, status)
+//                           2/3 REMARKS
+//                           3/3 TAKEOFF PERFORMANCE (V1/VR/V2/FLAPS/FLEX/THR/
+//                               ACC ALT/TR ALT/TRIM/MRTW), from the backend's
+//                               runway_results (JSON, not parsed out of text)
 //   TPS PRINT           — the full generated ACARS text, paginated like a real
 //                         CDU TEXT/REPORTS page, with a PRINT (download) key
 //
@@ -32,8 +38,8 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 //     keypad-driven commit model well.
 //   - V1/VR/V2/FLEX/FLAPS shown on PERF TAKEOFF 1/2 are the SimBrief XML
 //     values (or intersection-substituted ones) — TLR-scenario-interpolated
-//     numbers only exist after EXEC. The PERF RESULT and TPS PRINT pages
-//     show the authoritative result.
+//     numbers only exist after EXEC. The ACARS T/O RWY DATA and TPS PRINT
+//     pages show the authoritative result.
 
 const SCENARIO_DEFS = [
   { key: "DRY_PTOW",      surface: "DRY", cond: "PTOW",      label: "DRY PTOW"  },
@@ -59,7 +65,8 @@ function availableScenarios(xmlData) {
 const LINES_PER_PRINT_PAGE = 11;
 
 export default function CduApp() {
-  const [page, setPage] = useState("IDENT"); // IDENT | PERF1 | PERF2 | RESULT | PRINT
+  const [page, setPage] = useState("IDENT"); // IDENT | PERF1 | PERF2 | ACARS | PRINT
+  const [acarsPageIndex, setAcarsPageIndex] = useState(0); // 0=summary 1=remarks 2=perf
 
   const [xmlData, setXmlData] = useState(null);
   const [simbriefUsername, setSimbriefUsername] = useState(
@@ -96,6 +103,10 @@ export default function CduApp() {
   // {v1,vr,v2,flex,flaps,thr,acc_alt,tr_alt,trim_stab,mrtw} shape computed
   // server-side by generate_combined_output().
   const resultData = tpsResult?.runway_results?.[0] ?? null;
+  // Authentic ACARS T/O RWY DATA loadsheet summary (FLT/RLS/TIME, WIND/OAT/QNH,
+  // SECT A/B/C, GTOW/CG, ZFW/CG, TTL PAX, REMARKS) — matches the ERJ-170 POH
+  // "ACARS Takeoff Runway Data" reference pages, computed server-side.
+  const loadsheetSummary = tpsResult?.loadsheet_summary ?? null;
 
   function getSpeed(k) {
     return speedOverrides[k] ?? rwyData?.[k] ?? "";
@@ -276,9 +287,10 @@ export default function CduApp() {
       });
       setTpsResult(result.tps);
       setPrintPageIndex(0);
+      setAcarsPageIndex(0);
       setPerfStatus(`GENERATED — ${result.tps.filename}`);
       setPerfStatusErr(false);
-      setPage("RESULT");
+      setPage("ACARS");
     } catch (e) {
       setPerfStatus(e instanceof ApiError ? e.message.toUpperCase() : "GENERATION FAILED");
       setPerfStatusErr(true);
@@ -287,14 +299,44 @@ export default function CduApp() {
     }
   }
 
-  // ── PERF RESULT — authoritative computed performance (post-EXEC) ─────────
-  // Field layout matches the original CDU mock exactly: V1/VR/V2/FLAPS left,
-  // FLEX/THR/ACC ALT/TR ALT right, RUNWAY + TRIM/MRTW center.
-  function handleResultCommit(key, value) {
+  // ── ACARS T/O RWY DATA — authentic 3-page post-EXEC report ────────────────
+  // Matches the real Honeywell AeroData ACARS "Takeoff Runway Data" pages
+  // (ERJ-170 POH ch.9 sec.16): page 1/3 = loadsheet summary (FLT/RLS/TIME,
+  // WIND/OAT/QNH, SECT A/B/C, GTOW/CG, ZFW/CG, TTL PAX), page 2/3 = REMARKS,
+  // page 3/3 = computed TAKEOFF PERFORMANCE for the requested runway.
+  function handleAcarsCommit(key, value) {
     if (key === "return" && value === null) setPage("PERF2");
   }
 
-  const resultFields = resultData ? [
+  const acarsSummaryFields = loadsheetSummary ? [
+    { key: "flt",   label: "FLT NO",     value: String(loadsheetSummary.flt_no),       side: "L", editable: false },
+    { key: "rls",   label: "RLS NO",     value: String(loadsheetSummary.rls_no),       side: "L", editable: false },
+    { key: "oat",   label: "OAT C",      value: String(loadsheetSummary.oat),          side: "L", editable: false },
+    { key: "seca",  label: "SEC A PAX",  value: String(loadsheetSummary.sect_a_pax),   side: "L", editable: false },
+    { key: "secb",  label: "SEC B PAX",  value: String(loadsheetSummary.sect_b_pax),   side: "L", editable: false },
+    { key: "secc",  label: "SEC C PAX",  value: String(loadsheetSummary.sect_c_pax),   side: "L", editable: false },
+    { key: "time",  label: "TIME",       value: String(loadsheetSummary.time),         side: "R", editable: false },
+    { key: "wind",  label: "WIND",       value: String(loadsheetSummary.wind),         side: "R", editable: false },
+    { key: "qnh",   label: "QNH",        value: String(loadsheetSummary.qnh),          side: "R", editable: false },
+    { key: "fbag",  label: "F BAG/WT",   value: String(loadsheetSummary.sect_a_bagwt), side: "R", editable: false },
+    { key: "abag",  label: "A BAG/WT",   value: String(loadsheetSummary.sect_b_bagwt), side: "R", editable: false },
+    { key: "fuel",  label: "FUEL",       value: String(loadsheetSummary.sect_c_fuel),  side: "R", editable: false },
+    { key: "gtow",  label: "GTOW/CG",    value: String(loadsheetSummary.gtow_cg),      side: "C", editable: false },
+    { key: "zfw",   label: "ZFW/CG",     value: String(loadsheetSummary.zfw_cg),       side: "C", editable: false },
+    { key: "ttlpax",label: "TTL PAX",    value: String(loadsheetSummary.ttl_pax),      side: "C", editable: false },
+    { key: "status",label: "",           value: loadsheetSummary.takeoff_data_avail ? "TAKEOFF DATA AVAIL" : "NO TAKEOFF DATA AVAIL", side: "C", editable: false, small: true, error: !loadsheetSummary.takeoff_data_avail },
+    { key: "return",label: "",           value: "",                                    side: "C", editable: true, returnLine: true },
+  ] : [];
+
+  const acarsRemarksFields = loadsheetSummary ? [
+    { key: "hdr", label: "", value: "REMARKS", side: "C", editable: false, small: true },
+    ...(loadsheetSummary.remarks ?? []).map((rl, i) => ({
+      key: `rl${i}`, label: "", value: rl || " ", side: "C", editable: false, small: true,
+    })),
+    { key: "return", label: "", value: "", side: "C", editable: true, returnLine: true },
+  ] : [];
+
+  const acarsPerfFields = resultData ? [
     { key: "v1",     label: "V1",       value: String(resultData.v1),    side: "L", editable: false },
     { key: "vr",     label: "VR",       value: String(resultData.vr),    side: "L", editable: false },
     { key: "v2",     label: "V2",       value: String(resultData.v2),    side: "L", editable: false },
@@ -306,7 +348,16 @@ export default function CduApp() {
     { key: "rwy",    label: "RUNWAY",   value: resultData.runway,        side: "C", editable: false },
     { key: "trim",   label: "TRIM / MRTW", value: `${resultData.trim_stab}   ${resultData.mrtw}`, side: "C", editable: false },
     { key: "return", label: "",         value: "",                       side: "C", editable: true, returnLine: true },
-  ] : [];
+  ] : [
+    { key: "none",   label: "", value: "NO TAKEOFF DATA AVAIL", side: "C", editable: false, error: true },
+    { key: "return", label: "", value: "", side: "C", editable: true, returnLine: true },
+  ];
+
+  const ACARS_PAGES = [
+    { title: "ACARS T/O RWY DATA", fields: acarsSummaryFields },
+    { title: "ACARS T/O RWY DATA", fields: acarsRemarksFields },
+    { title: "ACARS T/O RWY DATA", fields: acarsPerfFields },
+  ];
 
   // ── TPS PRINT — paginated read-only text ──────────────────────────────────
   const printLines = tpsResult ? tpsResult.content.replace(/\r/g, "").split("\n") : [];
@@ -321,7 +372,7 @@ export default function CduApp() {
 
   function handlePrintPrev() {
     if (printPageIndex > 0) setPrintPageIndex(i => i - 1);
-    else setPage("RESULT");
+    else { setAcarsPageIndex(ACARS_PAGES.length - 1); setPage("ACARS"); }
   }
   function handlePrintNext() {
     if (printPageIndex < totalPrintPages - 1) setPrintPageIndex(i => i + 1);
@@ -351,7 +402,7 @@ export default function CduApp() {
       onPrev: () => setPage("IDENT"),
       onNext: () => setPage("PERF2"),
       onPerf: () => setPage("PERF1"),
-      onFpl: tpsResult ? () => setPage("RESULT") : undefined,
+      onFpl: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
     };
   } else if (page === "PERF2") {
     cduProps = {
@@ -360,19 +411,27 @@ export default function CduApp() {
       onFieldCommit: handlePerf2Commit,
       execAvailable: !!xmlData && !!rwyData && !generating,
       onExec: handleExec,
+      onDlk: handleExec, // real workflow: DLK sends the ACARS request, same trigger as EXEC
       onPrev: () => setPage("PERF1"),
-      onNext: tpsResult ? () => setPage("RESULT") : undefined,
+      onNext: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
       onPerf: () => setPage("PERF1"),
-      onFpl: tpsResult ? () => setPage("RESULT") : undefined,
+      onFpl: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
     };
-  } else if (page === "RESULT") {
+  } else if (page === "ACARS") {
+    const cur = ACARS_PAGES[acarsPageIndex];
     cduProps = {
-      title: "PERF TAKEOFF", pageNum: "RESULT",
-      fields: resultFields,
-      onFieldCommit: handleResultCommit,
+      title: cur.title, pageNum: `${acarsPageIndex + 1}/${ACARS_PAGES.length}`,
+      fields: cur.fields,
+      onFieldCommit: handleAcarsCommit,
       execAvailable: false,
-      onPrev: () => setPage("PERF2"),
-      onNext: () => setPage("PRINT"),
+      onPrev: () => {
+        if (acarsPageIndex > 0) setAcarsPageIndex(i => i - 1);
+        else setPage("PERF2");
+      },
+      onNext: () => {
+        if (acarsPageIndex < ACARS_PAGES.length - 1) setAcarsPageIndex(i => i + 1);
+        else { setPrintPageIndex(0); setPage("PRINT"); }
+      },
       onPerf: () => setPage("PERF1"),
       onFpl: handlePrintDownload,
     };

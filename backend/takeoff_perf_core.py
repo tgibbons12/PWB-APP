@@ -2038,7 +2038,7 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
                 file.write("FUELING IS COMPLETE\n")
                 file.write("AUTOMATED FLT OPS MESSAGE\n\n")
             print(f"[COMBINED] FUEL VARIANCE EXCEEDS {_fuel_tol} LBS - DATA NOT GENERATED")
-            return combined_file, []
+            return combined_file, [], {"takeoff_data_avail": False, "remarks": ["NO TAKEOFF DATA AVAIL"]}
     except (ValueError, TypeError) as e:
         print(f"[DEBUG] Fuel variance check skipped: {e}")
 
@@ -2125,6 +2125,32 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
             remarks.append("ON")
         remarks.append("NO LIVE")
         remarks.append(f"TKT INF:0 * LAP INF:{lap}")
+
+        # Structured summary for the CDU's "ACARS T/O RWY DATA 1/5, 2/5"
+        # pages — mirrors the real AeroData ACARS response format (see the
+        # ERJ-170 POH, Ch.9 Sec.16): FLT NO/RLS NO/TIME, WIND/OAT/QNH,
+        # SEC A/B/C (pax + bag weight per section), GTOW/CG, FUEL, ZFW/CG,
+        # TTL PAX, and REMARKS as its own page.
+        loadsheet_summary = {
+            "flt_no": fn,
+            "rls_no": rls_no,
+            "time": f"{time_gen}Z",
+            "wind": wind,
+            "oat": oat_int,
+            "qnh": qnh,
+            "sect_a_pax": fwd_pax,
+            "sect_a_bagwt": fwd_cargo,
+            "sect_b_pax": aft_pax,
+            "sect_b_bagwt": aft_cargo,
+            "sect_c_pax": lap,
+            "sect_c_fuel": fob_lbs,
+            "gtow_cg": f"{tow_k:.1f}/{cg_display}",
+            "zfw_cg": f"{zfw_k:.1f}/{zfw_cg:.1f}",
+            "ttl_pax": pax,
+            "remarks": remarks[1:],  # drop the leading "REMARKS" header token
+            "takeoff_data_avail": True,
+        }
+
         for rl in remarks:
             f.write(rl + "\n")
         f.write("\n")
@@ -2443,7 +2469,7 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
     except Exception as e:
         print(f"[WARNING] iMessage sanitize step failed: {e}")
 
-    return combined_file, runway_results
+    return combined_file, runway_results, loadsheet_summary
 
 
 # ====================================================================================

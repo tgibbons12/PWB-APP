@@ -519,7 +519,7 @@ def generate():
             # CDU authoritative V1/VR/V2/FLEX/FLAPS/THR/ACC ALT/TR ALT/
             # TRIM/MRTW as JSON, computed in the same pass that writes the
             # file, so the frontend never has to parse the printed text.
-            tps_path, runway_results = core.generate_combined_output(
+            tps_path, runway_results, loadsheet_summary = core.generate_combined_output(
                 loadsheet_data, uplink_data, selected_runways,
                 anti_ice_on, OUTPUT_FOLDER, cg_percent, tlr_tables,
                 tlr_scenario_active=tlr_scenario_active,
@@ -531,6 +531,7 @@ def generate():
                 "filename": os.path.basename(tps_path),
                 "atow": atow_lbs,
                 "runway_results": runway_results,
+                "loadsheet_summary": loadsheet_summary,
             }
 
         if mode in ("closeout", "all"):

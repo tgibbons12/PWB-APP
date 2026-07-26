@@ -90,6 +90,7 @@ export default function CduEmulator({
   onNext,          // optional: NEXT function key
   onPerf,          // optional: PERF function key
   onFpl,           // optional: FPL function key (repurposed as PRINT/DOWNLOAD on the TPS print page)
+  onDlk,           // optional: DLK function key (repurposed as "send ACARS request" — same trigger as EXEC, matches the real workflow where DLK sends the datalink request)
 }) {
   const [scratchpad, setScratchpad] = useState("");
   const [scratchIsError, setScratchIsError] = useState(false);
@@ -239,7 +240,7 @@ export default function CduEmulator({
           </div>
           <div className="cdu-func-row">
             <button className="cdu-func-key" onClick={() => handleUnimplemented("MENU")}>MENU</button>
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("DLK")}>DLK</button>
+            <button className={`cdu-func-key ${onDlk && execAvailable ? "cdu-exec-active" : ""}`} onClick={() => (onDlk ? onDlk() : handleUnimplemented("DLK"))}>DLK</button>
             <button className="cdu-func-key" onClick={() => (onNext ? onNext() : handleUnimplemented("NEXT"))}>NEXT</button>
             <button
               className={`cdu-func-key cdu-exec-key ${execAvailable ? "cdu-exec-active" : ""}`}
