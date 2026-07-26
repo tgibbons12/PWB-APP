@@ -18,12 +18,34 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 // footage of the Honeywell Primus Epic MCDU running this exact software
 // (highest-fidelity source — takes precedence over the ERJ-170 POH excerpt
 // and the printed COMBINED.txt sample where they disagree on wording):
+// Real navigation tree (POH ch.9 sec.16 p.9-59 "ACARS Navigation Windows",
+// with page contents from cockpit footage where the two disagree):
+//
+//   MENU  --DLK-->  ACARS MAIN MENU  --PERFORMANCE>-->  ACARS RWY PERF/M&B
+//                          |                                  |
+//                     <PRE FLT                    <CONDITIONS / <LOADSHEET
+//                          |                            / <RWY DATA
+//                   ACARS INITIALIZE
+//
+// Menu items belonging to ACARS applications this app doesn't implement
+// (ENROUTE, POST FLT, ATC/ATS/SYS MENU, MISC, MSG LOG, REPORTS, REQUESTS,
+// and both LANDING pages) are drawn greyed-out rather than omitted, so each
+// page still matches the real screen line-for-line and it's obvious what
+// exists versus what's wired up.
+//
 //   MENU                 — real top-level MENU page (matches a live WebFMC
 //                          screenshot exactly: ◂MISC/◂BKUP RADIO/MCDU
-//                          MAINT▸/MCDU STAT▸, none implemented — this app
-//                          only covers the ACARS takeoff workflow). This is
-//                          the app's starting page; DLK opens the ACARS app.
-//   IDENT                — enter a SimBrief username, fetch + parse the OFP
+//                          MAINT▸/MCDU STAT▸, none implemented). Starting
+//                          page; DLK opens the ACARS MAIN MENU.
+//   ACARS MAIN MENU      — <PRE FLT and PERFORMANCE> are live
+//   ACARS RWY PERF/M&B   — TAKEOFF <CONDITIONS, W&B <LOADSHEET, TAKEOFF
+//                          <RWY DATA; LANDING pages greyed out
+//   ACARS LOADSHEET      — AD/CH A/B/C, BAG/WT FWD/AFT, TTL FA/ACM, CLOSET,
+//                          T/O FUEL, BLST FUEL. Pre-filled from the OFP but
+//                          fully editable; entries override the OFP's
+//                          pax/cargo/fuel on the next send, same as the real
+//                          system (where the loadsheet supersedes PTOW).
+//   ACARS INITIALIZE     — enter a SimBrief username, fetch + parse the OFP
 //   ACARS TO CONDITIONS 1/2 — KLAX RWY 1/2/3 (departure ICAO + slot; a bare
 //                          runway id, or "RWY/INTXN" for an intersection
 //                          takeoff — up to 3 requested runways at once),
@@ -79,7 +101,8 @@ const SURFACE_SHORTHAND = { PLANNED: "PLANNED", DRY: "DRY_PTOW", WET: "WET_PTOW"
 const LINES_PER_PRINT_PAGE = 11;
 
 export default function CduApp() {
-  const [page, setPage] = useState("MENU"); // MENU | IDENT | COND1 | COND2 | ACARS | PRINT
+  // MENU | ACARSMENU | PERFWB | LOADSHEET | IDENT | COND1 | COND2 | ACARS | PRINT
+  const [page, setPage] = useState("MENU");
   const [acarsPageIndex, setAcarsPageIndex] = useState(0); // 0=summary 1=remarks 2..=perf per runway
 
   const [xmlData, setXmlData] = useState(null);
@@ -115,6 +138,20 @@ export default function CduApp() {
   const [tpsResult, setTpsResult] = useState(null); // { content, filename, atow, runway_results, loadsheet_summary }
   const [printPageIndex, setPrintPageIndex] = useState(0);
 
+  // ACARS LOADSHEET (ERJ-170 POH ch.9 sec.16 p.9-73/74) — "AD/CH" is
+  // adults/children per cabin section, "BAG/WT" is bag count / freight
+  // weight per hold. Stored as raw "a/b" strings exactly as typed, and
+  // only parsed when building the request payload.
+  const [adChA, setAdChA] = useState("");
+  const [adChB, setAdChB] = useState("");
+  const [adChC, setAdChC] = useState("");
+  const [bagFwd, setBagFwd] = useState("");
+  const [bagAft, setBagAft] = useState("");
+  const [faAcm, setFaAcm] = useState("2/0");  // POH default: 2 F/A, 0 ACM
+  const [closet, setCloset] = useState("65"); // POH default: 65 lb
+  const [toFuel, setToFuel] = useState("");
+  const [blstFuel, setBlstFuel] = useState("");
+
   // ── Data helpers ──────────────────────────────────────────────────────────
   const runwayIds = xmlData?.valid_runways?.map(r => r.id) ?? [];
   const surfaceChoices = availableSurfaces(xmlData);
@@ -135,23 +172,130 @@ export default function CduApp() {
   // ACARS takeoff workflow this app covers) so their LSKs just report
   // NOT AVAIL, same convention as the unimplemented function keys. The
   // real way into the ACARS app from here is the DLK (datalink) key.
-  function handleMenuCommit(key) {
-    const labels = { misc: "MISC", bkupradio: "BKUP RADIO", mcdumaint: "MCDU MAINT", mcdustat: "MCDU STAT" };
-    if (labels[key]) return { error: `${labels[key]} NOT AVAIL` };
-  }
+  function handleMenuCommit() { /* all MENU items are dim — handled in the emulator */ }
 
   const menuFields = [
-    { key: "misc",      label: "", value: "◂MISC",        side: "L", editable: true, selectable: true },
+    { key: "misc",      label: "", value: "◂MISC",        side: "L", dim: true, dimLabel: "MISC" },
     { key: "_blank1",   label: "", value: "",              side: "L", editable: false },
     { key: "_blank2",   label: "", value: "",              side: "L", editable: false },
     { key: "_blank3",   label: "", value: "",              side: "L", editable: false },
-    { key: "bkupradio", label: "", value: "◂BKUP RADIO",   side: "L", editable: true, selectable: true },
+    { key: "bkupradio", label: "", value: "◂BKUP RADIO",   side: "L", dim: true, dimLabel: "BKUP RADIO" },
     { key: "_blank4",   label: "", value: "",              side: "R", editable: false },
     { key: "_blank5",   label: "", value: "",              side: "R", editable: false },
     { key: "_blank6",   label: "", value: "",              side: "R", editable: false },
     { key: "_blank7",   label: "", value: "",              side: "R", editable: false },
-    { key: "mcdumaint", label: "", value: "MCDU MAINT▸",   side: "R", editable: true, selectable: true },
-    { key: "mcdustat",  label: "", value: "MCDU STAT▸",    side: "R", editable: true, selectable: true },
+    { key: "mcdumaint", label: "", value: "MCDU MAINT▸",   side: "R", dim: true, dimLabel: "MCDU MAINT" },
+    { key: "mcdustat",  label: "", value: "MCDU STAT▸",    side: "R", dim: true, dimLabel: "MCDU STAT" },
+  ];
+
+  // ── ACARS MAIN MENU ────────────────────────────────────────────────────────
+  // Line-for-line from real E-Jet cockpit footage of this exact software.
+  // (The POH's p.9-60 diagram shows an older variant — <IN FLT/<FREE TEXT/
+  // <FLT TIMES with PERF/M&B at 4R — so the footage wins, per the same rule
+  // used everywhere else here.) Only <PRE FLT and PERFORMANCE> are wired:
+  // everything else is a different ACARS application this app doesn't cover,
+  // so it's drawn greyed-out rather than omitted, keeping the page honest.
+  function handleAcarsMenuCommit(key) {
+    if (key === "preflt") { setPage("IDENT"); return; }
+    if (key === "perf")   { setPage(xmlData ? "PERFWB" : "IDENT"); return; }
+  }
+
+  const acarsMenuFields = [
+    { key: "preflt",  label: "", value: "<PRE FLT",     side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "enroute", label: "", value: "<ENROUTE",     side: "L", dim: true, dimLabel: "ENROUTE" },
+    { key: "postflt", label: "", value: "<POST FLT",    side: "L", dim: true, dimLabel: "POST FLT" },
+    { key: "atc",     label: "", value: "<ATC MENU",    side: "L", dim: true, dimLabel: "ATC MENU" },
+    { key: "ats",     label: "", value: "<ATS MENU",    side: "L", dim: true, dimLabel: "ATS MENU" },
+    { key: "sys",     label: "", value: "<SYS MENU",    side: "L", dim: true, dimLabel: "SYS MENU" },
+    { key: "_r1",     label: "", value: "",              side: "R", editable: false },
+    { key: "misc2",   label: "", value: "MISC>",         side: "R", dim: true, dimLabel: "MISC" },
+    { key: "msglog",  label: "", value: "MSG LOG>",      side: "R", dim: true, dimLabel: "MSG LOG" },
+    { key: "reports", label: "", value: "REPORTS>",      side: "R", dim: true, dimLabel: "REPORTS" },
+    { key: "requests",label: "", value: "REQUESTS>",     side: "R", dim: true, dimLabel: "REQUESTS" },
+    { key: "perf",    label: "", value: "PERFORMANCE>",  side: "R", editable: true, selectable: true, tone: "white" },
+  ];
+
+  // ── ACARS RWY PERF/M&B ─────────────────────────────────────────────────────
+  // Exactly the POH's p.9-69 layout: TAKEOFF <CONDITIONS / W&B <LOADSHEET /
+  // TAKEOFF <RWY DATA on the left, LANDING CONDITIONS> and LANDING RWY DATA>
+  // on the right (both greyed — this app computes takeoff performance only),
+  // and RETURN TO <ACARS MENU at 6L.
+  function handlePerfWbCommit(key) {
+    if (key === "toconditions") { setPage("COND1"); return; }
+    if (key === "loadsheet")    { setPage("LOADSHEET"); return; }
+    if (key === "torwydata") {
+      if (!tpsResult) return { error: "NO TAKEOFF DATA AVAIL" };
+      setAcarsPageIndex(0); setPage("ACARS");
+      return;
+    }
+    if (key === "acarsmenu") { setPage("ACARSMENU"); return; }
+  }
+
+  const perfWbFields = [
+    { key: "toconditions", label: "TAKEOFF",    value: "<CONDITIONS", side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "loadsheet",    label: "W&B",        value: "<LOADSHEET",  side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "torwydata",    label: "TAKEOFF",    value: "<RWY DATA",   side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "_p1",          label: "",           value: "",             side: "L", editable: false },
+    { key: "_p2",          label: "",           value: "",             side: "L", editable: false },
+    { key: "acarsmenu",    label: "RETURN TO",  value: "<ACARS MENU", side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "ldgconditions",label: "LANDING",    value: "CONDITIONS>", side: "R", dim: true, dimLabel: "LANDING COND" },
+    { key: "_p3",          label: "",           value: "",             side: "R", editable: false },
+    { key: "ldgrwydata",   label: "LANDING",    value: "RWY DATA>",   side: "R", dim: true, dimLabel: "LANDING RWY DATA" },
+  ];
+
+  // ── ACARS LOADSHEET (POH p.9-73/74) ────────────────────────────────────────
+  // The real page is the crew's manual weight & balance entry. Ours starts
+  // pre-filled from the SimBrief OFP (so it's usable as-is) but every field
+  // is editable, and whatever is entered here overrides the OFP numbers on
+  // the next send. Amber = mandatory entry, cyan = optional, per the POH's
+  // color-coding note.
+  //
+  // The backend takes totals (pax / cargo / ramp fuel), so the per-section
+  // entries are summed on send. Bag COUNT is converted at the FAA standard
+  // 30 lb/bag checked-baggage weight and added to the freight WT figure.
+  const LB_PER_BAG = 30;
+  function sumPair(s) {
+    // "24/0" -> 24 + 0 ; "24" -> 24 ; "" -> 0
+    return String(s).split("/").reduce((t, p) => t + (parseInt(p, 10) || 0), 0);
+  }
+  function bagWeight(s) {
+    const [count, wt] = String(s).split("/");
+    return (parseInt(count, 10) || 0) * LB_PER_BAG + (parseInt(wt, 10) || 0);
+  }
+
+  function handleLoadsheetCommit(key, value) {
+    if (key === "perfwb") { setPage("PERFWB"); return; }
+    if (key === "torwydata") {
+      if (!tpsResult) return { error: "NO TAKEOFF DATA AVAIL" };
+      setAcarsPageIndex(0); setPage("ACARS");
+      return;
+    }
+    const setters = {
+      adcha: setAdChA, adchb: setAdChB, adchc: setAdChC,
+      bagfwd: setBagFwd, bagaft: setBagAft,
+      faacm: setFaAcm, closet: setCloset, tofuel: setToFuel, blstfuel: setBlstFuel,
+    };
+    const setter = setters[key];
+    if (!setter) return;
+    if (value === null) return; // not a cyclable field
+    setter(value === DELETE_TOKEN ? "" : value);
+  }
+
+  const loadsheetFields = [
+    { key: "adcha",   label: "AD/CH A",      value: adChA,   side: "L", editable: true, tone: "amber" },
+    { key: "adchb",   label: "AD/CH B",      value: adChB,   side: "L", editable: true, tone: "amber" },
+    { key: "adchc",   label: "AD/CH C",      value: adChC,   side: "L", editable: true, tone: "amber" },
+    { key: "bagfwd",  label: "BAG/WT FWD",   value: bagFwd,  side: "L", editable: true, tone: "cyan" },
+    { key: "bagaft",  label: "BAG/WT AFT",   value: bagAft,  side: "L", editable: true, tone: "cyan" },
+    { key: "perfwb",  label: "",             value: "<PERF/M&B", side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "faacm",   label: "TTL FA/ACM",   value: faAcm,   side: "R", editable: true, tone: "cyan" },
+    { key: "closet",  label: "CLOSET",       value: closet,  side: "R", editable: true, tone: "cyan" },
+    { key: "tofuel",  label: "T/O FUEL",     value: toFuel,  side: "R", editable: true, tone: "cyan" },
+    { key: "blstfuel",label: "BLST FUEL",    value: blstFuel,side: "R", editable: true, tone: "cyan" },
+    { key: "torwydata", label: "T/O",        value: "DATA>", side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "ttlpax",  label: "TTL PAX",
+      value: String(sumPair(adChA) + sumPair(adChB) + sumPair(adChC)),
+      side: "C", editable: false, tone: "green", small: true },
   ];
 
   // ── IDENT page ─────────────────────────────────────────────────────────────
@@ -185,9 +329,25 @@ export default function CduApp() {
       setTpsResult(null);
       setPrintPageIndex(0);
 
+      // Pre-fill the ACARS LOADSHEET from the OFP so it's immediately usable.
+      // Section split mirrors the backend's own (25% fwd / 75% aft), and the
+      // cargo split is 50/50 since the OFP only gives a single total.
+      const paxTotal = Number(data.pax_count_xml) || 0;
+      const cargoTotal = Number(data.cargo_xml) || 0;
+      const fwdPax = Math.round(paxTotal * 0.25);
+      setAdChA(`${fwdPax}/0`);
+      setAdChB(`${paxTotal - fwdPax}/0`);
+      setAdChC("0/0");
+      setBagFwd(`0/${Math.round(cargoTotal / 2)}`);
+      setBagAft(`0/${cargoTotal - Math.round(cargoTotal / 2)}`);
+      setFaAcm("2/0");
+      setCloset("65");
+      setToFuel(String(data.plan_ramp_xml ?? ""));
+      setBlstFuel("");
+
       setIdentStatus(`OFP LOADED — FLT ${data.flight_number} ${data.origin_iata}-${data.dest_iata}`);
       setIdentStatusErr(false);
-      setPage("COND1");
+      setPage("PERFWB");
     } catch (e) {
       setIdentStatus(e instanceof ApiError ? e.message.toUpperCase() : "COULD NOT REACH SERVER");
       setIdentStatusErr(true);
@@ -224,7 +384,8 @@ export default function CduApp() {
 
   function handleCond1Commit(key, value) {
     if (key === "return") {
-      if (value === null) setPage("IDENT");
+      // 6L on the real T/O CONDITIONS page returns to the PERF/M&B menu.
+      if (value === null) setPage("PERFWB");
       return; // DELETE on the return line: not applicable, no-op
     }
     if (key === "rwy1" || key === "rwy2" || key === "rwy3") {
@@ -355,6 +516,12 @@ export default function CduApp() {
       // param is a single display string — append it the same way the
       // real printed reports show gust (e.g. "270/15G25").
       const windStr = gust.trim() ? `${wind}G${gust.trim()}` : wind;
+      // ACARS LOADSHEET entries override the OFP's own pax/cargo/fuel — same
+      // as the real system, where the loadsheet supersedes the planned figures
+      // (and PTOW is discarded) once it's been filled in.
+      const lsPax = sumPair(adChA) + sumPair(adChB) + sumPair(adChC);
+      const lsCargo = bagWeight(bagFwd) + bagWeight(bagAft);
+      const lsFuel = parseInt(toFuel, 10);
       const result = await apiGenerateTps({
         xml_data: xmlData,
         mode: "tps",
@@ -365,6 +532,9 @@ export default function CduApp() {
         runways,
         speedOverrides: flapSel !== "OPTIMUM" ? { flaps: flapSel } : {},
         forceMax,
+        ...(lsPax   > 0 ? { pax: lsPax }     : {}),
+        ...(lsCargo > 0 ? { cargo: lsCargo } : {}),
+        ...(Number.isFinite(lsFuel) && lsFuel > 0 ? { ramp: lsFuel } : {}),
       });
       setTpsResult(result.tps);
       setPrintPageIndex(0);
@@ -505,19 +675,50 @@ export default function CduApp() {
       fields: menuFields,
       onFieldCommit: handleMenuCommit,
       execAvailable: false,
-      onDlk: () => setPage("IDENT"), // real workflow: DLK opens the datalink/ACARS app
-      onPerf: () => setPage(xmlData ? "COND1" : "IDENT"),
+      onDlk: () => setPage("ACARSMENU"), // real workflow: DLK opens the ACARS MAIN MENU
+      onPerf: () => setPage(xmlData ? "PERFWB" : "ACARSMENU"),
+    };
+  } else if (page === "ACARSMENU") {
+    cduProps = {
+      title: "ACARS    MAIN MENU", pageNum: "",
+      fields: acarsMenuFields,
+      onFieldCommit: handleAcarsMenuCommit,
+      execAvailable: false,
+      onPrev: () => setPage("MENU"),
+      onPerf: () => setPage(xmlData ? "PERFWB" : "IDENT"),
+    };
+  } else if (page === "PERFWB") {
+    cduProps = {
+      title: "ACARS RWY PERF/M&B", pageNum: "",
+      fields: perfWbFields,
+      onFieldCommit: handlePerfWbCommit,
+      execAvailable: false,
+      onPrev: () => setPage("ACARSMENU"),
+      onNext: () => setPage("COND1"),
+      onPerf: () => setPage("PERFWB"),
+    };
+  } else if (page === "LOADSHEET") {
+    cduProps = {
+      title: "ACARS   LOADSHEET", pageNum: "1/2",
+      fields: loadsheetFields,
+      onFieldCommit: handleLoadsheetCommit,
+      execAvailable: !!xmlData && [runway1, runway2, runway3].some(r => r.trim()) && !generating,
+      onExec: handleExec,
+      onDlk: handleExec, // 6R DATALINK SEND* on the real page
+      onPrev: () => setPage("PERFWB"),
+      onNext: () => setPage("COND1"),
+      onPerf: () => setPage("PERFWB"),
     };
   } else if (page === "IDENT") {
     cduProps = {
-      title: "IDENT", pageNum: "1/1",
+      title: "ACARS   INITIALIZE", pageNum: "1/1",
       fields: identFields,
       onFieldCommit: handleIdentCommit,
       execAvailable: !xmlData && !loadingPlan && simbriefUsername.trim().length > 0,
       onExec: () => doFetch(simbriefUsername.trim()),
-      onPrev: () => setPage("MENU"),
-      onNext: xmlData ? () => setPage("COND1") : undefined,
-      onPerf: xmlData ? () => setPage("COND1") : undefined,
+      onPrev: () => setPage("ACARSMENU"),
+      onNext: xmlData ? () => setPage("PERFWB") : undefined,
+      onPerf: xmlData ? () => setPage("PERFWB") : undefined,
     };
   } else if (page === "COND1") {
     cduProps = {
@@ -525,9 +726,9 @@ export default function CduApp() {
       fields: cond1Fields,
       onFieldCommit: handleCond1Commit,
       execAvailable: false,
-      onPrev: () => setPage("IDENT"),
+      onPrev: () => setPage("PERFWB"),
       onNext: () => setPage("COND2"),
-      onPerf: () => setPage("COND1"),
+      onPerf: () => setPage("PERFWB"),
       onFpl: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
     };
   } else if (page === "COND2") {
@@ -540,7 +741,7 @@ export default function CduApp() {
       onDlk: handleExec, // real workflow: DATALINK SEND* sends the ACARS request, same trigger as EXEC
       onPrev: () => setPage("COND1"),
       onNext: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
-      onPerf: () => setPage("COND1"),
+      onPerf: () => setPage("PERFWB"),
       onFpl: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
     };
   } else if (page === "ACARS") {
@@ -558,7 +759,7 @@ export default function CduApp() {
         if (acarsPageIndex < ACARS_PAGES.length - 1) setAcarsPageIndex(i => i + 1);
         else { setPrintPageIndex(0); setPage("PRINT"); }
       },
-      onPerf: () => setPage("COND1"),
+      onPerf: () => setPage("PERFWB"),
       onFpl: handlePrintDownload,
     };
   } else { // PRINT
@@ -569,7 +770,7 @@ export default function CduApp() {
       execAvailable: false,
       onPrev: handlePrintPrev,
       onNext: handlePrintNext,
-      onPerf: () => setPage("COND1"),
+      onPerf: () => setPage("PERFWB"),
       onFpl: handlePrintDownload, // FPL repurposed as PRINT/DOWNLOAD on this page
     };
   }

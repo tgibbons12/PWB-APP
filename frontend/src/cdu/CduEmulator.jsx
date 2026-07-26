@@ -88,16 +88,18 @@ function validateField(fieldKey, raw) {
 
 // One line-pair: a label line (small, dim) and a data line (large, bright).
 // side: "L" | "R" | "C" (center, no LSK)
-function CduLine({ label, value, side, editable, small, error, cyclable, returnLine, returnLabel, tight }) {
+function CduLine({ label, value, side, editable, small, error, cyclable, returnLine, returnLabel, tight, dim, tone }) {
   const displayValue = returnLine
     ? (returnLabel || "<RETURN>")
     : value
       ? `${cyclable && editable ? "↓" : ""}${value}`
       : (editable ? "----" : " ");
+  // Explicit `tone` wins; otherwise fall back to the old editable=green rule.
+  const toneClass = dim ? "cdu-dim" : tone ? `cdu-tone-${tone}` : editable ? "cdu-editable" : "";
   return (
     <div className={`cdu-line cdu-line-${side} ${tight ? "cdu-line-tight" : ""} ${returnLine ? "cdu-line-return-wrap" : ""}`}>
-      {label && <div className="cdu-line-label">{label}</div>}
-      <div className={`cdu-line-value ${editable ? "cdu-editable" : ""} ${small ? "cdu-line-small" : ""} ${error ? "cdu-line-error" : ""} ${returnLine ? "cdu-return-line" : ""}`}>
+      {label && <div className={`cdu-line-label ${dim ? "cdu-dim" : ""}`}>{label}</div>}
+      <div className={`cdu-line-value ${toneClass} ${small ? "cdu-line-small" : ""} ${error ? "cdu-line-error" : ""} ${returnLine ? "cdu-return-line" : ""}`}>
         {displayValue}
       </div>
     </div>
@@ -173,6 +175,14 @@ export default function CduEmulator({
 
   const handleLsk = useCallback((field) => {
     if (!field) return; // clicked an LSK with nothing bound on that line
+
+    // Greyed-out menu items — shown (so the page matches the real screen
+    // line-for-line) but not implemented in this app.
+    if (field.dim) {
+      setScratchpad(`${field.dimLabel || "SELECTION"} NOT AVAIL`);
+      setScratchIsError(true);
+      return;
+    }
 
     if (!scratchpad) {
       if (field.editable && (field.cyclable || field.returnLine || field.selectable)) {
@@ -250,12 +260,12 @@ export default function CduEmulator({
             <div className="cdu-screen-top">
               <div className={`cdu-col cdu-col-left ${leftFields.length && leftFields.every(f => f.tight) ? "cdu-col-tight" : ""}`}>
                 {leftFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} />
+                  <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} dim={f.dim} tone={f.tone} />
                 ))}
               </div>
               <div className={`cdu-col cdu-col-right ${rightFields.length && rightFields.every(f => f.tight) ? "cdu-col-tight" : ""}`}>
                 {rightFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} />
+                  <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} dim={f.dim} tone={f.tone} />
                 ))}
               </div>
             </div>
@@ -263,7 +273,7 @@ export default function CduEmulator({
               {centerFields.map((f, i) => (
                 f.pack
                   ? <CduPackLine key={f.key || i} pack={f.pack} tight={f.tight} />
-                  : <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} />
+                  : <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} dim={f.dim} tone={f.tone} />
               ))}
             </div>
           </div>
@@ -413,6 +423,14 @@ const CDU_CSS = `
 .cdu-line-pack.cdu-line-tight .cdu-pack-item .cdu-line-label { font-size: 7.5px; }
 .cdu-line-pack.cdu-line-tight .cdu-pack-item .cdu-line-value { font-size: 10px; }
 .cdu-editable { color: #7fff9e; }
+/* Real AeroData ACARS color code (ERJ-170 POH ch.9 sec.16, "Note" on the
+   ACARS MAIN MENU page): white = menu selection item, amber = mandatory
+   entry, cyan = optional entry, green = AeroData-provided output value. */
+.cdu-tone-white { color: #f2f2f2; }
+.cdu-tone-amber { color: #ffb020; }
+.cdu-tone-cyan  { color: #35d6ff; }
+.cdu-tone-green { color: #4dff7c; }
+.cdu-dim { color: #5a5a5a; }
 .cdu-line-error { color: #ff5c4d; }
 .cdu-return-line { color: #f2f2f2; }
 .cdu-scratchpad { color: #fff; font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
