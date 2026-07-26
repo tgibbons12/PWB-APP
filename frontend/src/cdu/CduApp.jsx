@@ -14,20 +14,20 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 // in one printout), not the later TPS-app's split generate_tps()/
 // generate_closeout(). See backend/takeoff_perf_core.py.
 //
-// Page flow and field layout below are taken directly from the ERJ-170 POH
-// (Chapter 9, Section 16, "AeroData ACARS Performance System") — the request
-// pages mirror the real ACARS T/O CONDITION 1/2 and 2/2 screens field-for-
-// field, and the report pages mirror a live-generated ACARS COMBINED.txt
-// sample exactly (labels, groupings, and the one-block-per-runway pattern):
+// Page flow and field layout are confirmed against real E-Jet cockpit
+// footage of the Honeywell Primus Epic MCDU running this exact software
+// (highest-fidelity source — takes precedence over the ERJ-170 POH excerpt
+// and the printed COMBINED.txt sample where they disagree on wording):
 //   IDENT                — enter a SimBrief username, fetch + parse the OFP
-//   ACARS T/O COND 1/2   — KIND RWY 1/2/3 (runway, or "RWY/INTXN" for an
-//                          intersection takeoff, up to 3 requested runways
-//                          at once — matches the real system's 3-runway
-//                          limit), SURFACE, WIND, OAT/QNH (one combined
-//                          field on real hardware)
-//   ACARS T/O COND 2/2   — FLAP (OPT/1/2/4), ANTI-ICE (OFF/ALL), THRUST
-//                          (NORMAL/MAX) — DLK/EXEC sends the request,
-//                          same as the real DATALINK SEND* key
+//   ACARS TO CONDITIONS 1/2 — KLAX RWY 1/2/3 (departure ICAO + slot; a bare
+//                          runway id, or "RWY/INTXN" for an intersection
+//                          takeoff — up to 3 requested runways at once),
+//                          SURFACE, WIND, GUST (separate fields), OAT C/QNH
+//                          (one combined field), REL VERSION, PTOW
+//   ACARS TO CONDITIONS 2/2 — ANTI-ICE (AUTO/ON), FLAPS (OPTIMUM/1/2/4),
+//                          THRUST (OPTIMUM/MAX), LLWS ADVISORY (NO/YES,
+//                          informational only) — DLK/EXEC sends the
+//                          request, same as the real DATALINK SEND* key
 //   ACARS T/O RWY DATA   — loadsheet summary (FLT/RLS/SECT A/B/C/GTOW-CG/
 //                          ZFW-CG/FOB/TOT PAX), REMARKS, then one TAKEOFF
 //                          PERFORMANCE page per requested runway
@@ -39,9 +39,17 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 //   - No separate ACARS LOADSHEET request — the backend returns loadsheet
 //     summary + takeoff performance together in one call, so there's no
 //     standalone "W&B LOADSHEET>" shortcut page.
-//   - No PTOW (planned takeoff weight) preview field, and no contamination
-//     depth (LEVEL 1/2/3) for SURFACE — the backend's TLR interpolation
-//     only has DRY/WET tables, not compacted-snow/wet-ice/contaminated.
+//   - REL VERSION and PTOW are cosmetic only (not sent to the backend) —
+//     REL VERSION's purpose isn't documented anywhere available, and PTOW
+//     is discarded by the real system too once real loadsheet data exists,
+//     which ours always does.
+//   - No contamination depth (LEVEL 1/2/3) for SURFACE — the backend's TLR
+//     interpolation only has DRY/WET tables, not compacted-snow/wet-ice.
+//   - ANTI-ICE only has AUTO/ON (not AUTO/ON/OFF) and THRUST only has
+//     OPTIMUM/MAX — the backend's anti-ice and thrust-mode flags are each
+//     a single boolean, so a 3rd state wouldn't do anything different.
+//   - LLWS ADVISORY is UI-only — it's an informational flag on the real
+//     system too and never affects the computed takeoff numbers.
 //   - No Closeout tab — that flow depends on a LOCAL backend running on the
 //     ops Mac and doesn't map onto the keypad-driven commit model well.
 
@@ -77,7 +85,7 @@ export default function CduApp() {
   const [identStatus, setIdentStatus] = useState("ENTER SIMBRIEF ID");
   const [identStatusErr, setIdentStatusErr] = useState(false);
 
-  // ACARS T/O CONDITION 1/2 — KIND RWY 1/2/3, SURFACE, WIND, OAT/QNH
+  // ACARS TO CONDITIONS 1/2 — KLAX RWY 1/2/3, SURFACE, WIND, GUST, OAT/QNH
   const [runway1, setRunway1] = useState("");
   const [runway2, setRunway2] = useState("");
   const [runway3, setRunway3] = useState("");
@@ -85,11 +93,15 @@ export default function CduApp() {
   const [oat, setOat] = useState("");
   const [qnh, setQnh] = useState("");
   const [wind, setWind] = useState("");
+  const [gust, setGust] = useState(""); // separate field from WIND on the real screen
+  const [relVersion, setRelVersion] = useState(""); // cosmetic only — not wired to the backend
+  const [ptow, setPtow] = useState(""); // cosmetic only — real system discards this once real loadsheet data exists, which ours always has
 
-  // ACARS T/O CONDITION 2/2 — FLAP, ANTI-ICE, THRUST
-  const [flapSel, setFlapSel] = useState("OPT"); // OPT | 1 | 2 | 4
-  const [antiIce, setAntiIce] = useState(false); // OFF | ALL
-  const [forceMax, setForceMax] = useState(false); // NORMAL (flex) | MAX
+  // ACARS TO CONDITIONS 2/2 — ANTI-ICE, FLAPS, THRUST, LLWS ADVISORY
+  const [flapSel, setFlapSel] = useState("OPTIMUM"); // OPTIMUM | 1 | 2 | 4
+  const [antiIce, setAntiIce] = useState(false); // AUTO | ON
+  const [forceMax, setForceMax] = useState(false); // OPTIMUM (flex) | MAX
+  const [llwsAdvisory, setLlwsAdvisory] = useState(false); // NO | YES — advisory only, not sent to the backend
 
   const [generating, setGenerating] = useState(false);
   const [perfStatus, setPerfStatus] = useState("");
@@ -129,12 +141,16 @@ export default function CduApp() {
       setRunway2("");
       setRunway3("");
       setSurface("PLANNED");
-      setFlapSel("OPT");
+      setFlapSel("OPTIMUM");
       setAntiIce(false);
       setForceMax(false);
+      setLlwsAdvisory(false);
       setOat(data.temp);
       setQnh(data.qnh);
       setWind(data.wind);
+      setGust("");
+      setRelVersion("");
+      setPtow("");
       setTpsResult(null);
       setPrintPageIndex(0);
 
@@ -164,7 +180,11 @@ export default function CduApp() {
     ] : []),
   ];
 
-  // ── ACARS T/O CONDITION 1/2 — KIND RWY 1/2/3, SURFACE, WIND, OAT/QNH ───────
+  // ── ACARS TO CONDITIONS 1/2 — KLAX RWY 1/2/3, SURFACE, WIND, GUST, OAT/QNH ──
+  // Field set and exact wording confirmed against real E-Jet cockpit footage
+  // (Honeywell Primus Epic MCDU, "ACARS TO CONDITIONS 1/2"): "KLAX RWY 1/2/3"
+  // (departure ICAO + slot), SURFACE, WIND and GUST as two separate fields
+  // (not one combined string), "OAT C/QNH" combined, REL VERSION, PTOW.
   function cycleRunwaySlot(current, setter) {
     const opts = ["", ...runwayIds];
     const idx = opts.indexOf(current);
@@ -199,6 +219,9 @@ export default function CduApp() {
       return;
     }
     if (key === "wind") { setWind(value); return; }
+    if (key === "gust") { setGust(value); return; }
+    if (key === "relversion") { setRelVersion(value); return; }
+    if (key === "ptow") { setPtow(value); return; }
     if (key === "oatqnh") {
       const [o, q] = value.split("/");
       if (o === undefined || q === undefined) return { error: "INVALID ENTRY" };
@@ -207,29 +230,35 @@ export default function CduApp() {
     }
   }
 
-  // "KIND" on the real screen isn't a literal word — it's the departure
-  // airport's ICAO code shown above the entry line (e.g. "KIND" for
-  // Indianapolis, per the POH's own worked example), confirming which
-  // airport RWY 1/2/3 apply to. Render it from the loaded flight plan
-  // instead of the literal string "KIND".
+  // "KLAX" on the real screen isn't a literal word — it's the departure
+  // airport's ICAO code shown above each entry line, confirming which
+  // airport RWY 1/2/3 apply to. Render it from the loaded flight plan.
   const depIcao = xmlData?.origin_icao || "----";
   const cond1Fields = xmlData ? [
-    { key: "rwy1",    label: `${depIcao} RWY 1`, value: runway1, side: "L", editable: true, cyclable: true },
-    { key: "rwy2",    label: `${depIcao} RWY 2`, value: runway2, side: "L", editable: true, cyclable: true },
-    { key: "rwy3",    label: `${depIcao} RWY 3`, value: runway3, side: "L", editable: true, cyclable: true },
-    { key: "surface", label: "SURFACE",    value: SURFACE_LABELS[surface] ?? surface, side: "L", editable: true, cyclable: true },
-    { key: "wind",    label: "WIND",       value: String(wind), side: "R", editable: true },
-    { key: "oatqnh",  label: "OAT/QNH",    value: `${oat}/${qnh}`, side: "R", editable: true },
-    { key: "status",  label: "",           value: perfStatus, side: "C", editable: false, small: true, error: perfStatusErr },
-    // Real screen shows "<PERF/M&B" here (LSK 6L, returns to the ACARS RWY
-    // PERF/W&B menu), not a generic "<RETURN>" — per the POH page 1/2 screen.
-    { key: "return",  label: "",           value: "", side: "C", editable: true, returnLine: true, returnLabel: "<PERF/M&B" },
+    { key: "rwy1",       label: `${depIcao} RWY 1`, value: runway1, side: "L", editable: true, cyclable: true },
+    { key: "rwy2",       label: `${depIcao} RWY 2`, value: runway2, side: "L", editable: true, cyclable: true },
+    { key: "rwy3",       label: `${depIcao} RWY 3`, value: runway3, side: "L", editable: true, cyclable: true },
+    { key: "surface",    label: "SURFACE",     value: SURFACE_LABELS[surface] ?? surface, side: "L", editable: true, cyclable: true },
+    { key: "wind",       label: "WIND",        value: String(wind), side: "R", editable: true },
+    { key: "gust",       label: "GUST",        value: String(gust), side: "R", editable: true },
+    { key: "oatqnh",     label: "OAT C/QNH",   value: `${oat}/${qnh}`, side: "R", editable: true },
+    { key: "relversion", label: "REL VERSION", value: relVersion, side: "R", editable: true },
+    { key: "ptow",       label: "PTOW",        value: ptow, side: "R", editable: true },
+    { key: "status",     label: "",            value: perfStatus, side: "C", editable: false, small: true, error: perfStatusErr },
+    { key: "return",     label: "",            value: "", side: "C", editable: true, returnLine: true },
   ] : [];
 
-  // ── ACARS T/O CONDITION 2/2 — FLAP, ANTI-ICE, THRUST, then SEND/DLK/EXEC ──
+  // ── ACARS TO CONDITIONS 2/2 — ANTI-ICE, FLAPS, THRUST, LLWS ADVISORY ───────
+  // Exact field order and wording confirmed against real E-Jet cockpit
+  // footage: ANTI-ICE first (not last), "FLAPS" (plural) not "FLAP",
+  // "OPTIMUM" (not the abbreviation "OPT"/"NORMAL"), and a fourth field —
+  // LLWS ADVISORY — that this app didn't have at all before. All four
+  // fields sit in a single left-hand column with nothing on the right,
+  // matching the real screen. LLWS ADVISORY is informational only (it
+  // doesn't change the takeoff numbers) so it isn't sent to the backend.
   function handleCond2Commit(key, value) {
-    if (key === "flap") {
-      const opts = ["OPT", "1", "2", "4"];
+    if (key === "flaps") {
+      const opts = ["OPTIMUM", "1", "2", "4"];
       if (value === null) {
         const idx = opts.indexOf(flapSel);
         setFlapSel(opts[(idx + 1) % opts.length]);
@@ -243,8 +272,8 @@ export default function CduApp() {
     if (key === "antiice") {
       if (value === null) { setAntiIce(a => !a); return; }
       const v = value.toUpperCase();
-      if (v === "ALL") setAntiIce(true);
-      else if (v === "OFF") setAntiIce(false);
+      if (v === "ON") setAntiIce(true);
+      else if (v === "AUTO") setAntiIce(false);
       else return { error: "INVALID ENTRY" };
       return;
     }
@@ -252,17 +281,26 @@ export default function CduApp() {
       if (value === null) { setForceMax(f => !f); return; }
       const v = value.toUpperCase();
       if (v === "MAX") setForceMax(true);
-      else if (v === "NORMAL") setForceMax(false);
+      else if (v === "OPTIMUM") setForceMax(false);
+      else return { error: "INVALID ENTRY" };
+      return;
+    }
+    if (key === "llws") {
+      if (value === null) { setLlwsAdvisory(a => !a); return; }
+      const v = value.toUpperCase();
+      if (v === "YES") setLlwsAdvisory(true);
+      else if (v === "NO") setLlwsAdvisory(false);
       else return { error: "INVALID ENTRY" };
       return;
     }
   }
 
   const cond2Fields = xmlData ? [
-    { key: "flap",    label: "FLAP",     value: flapSel,               side: "L", editable: true, cyclable: true },
-    { key: "antiice", label: "ANTI-ICE", value: antiIce ? "ALL" : "OFF", side: "L", editable: true, cyclable: true },
-    { key: "thrust",  label: "THRUST",   value: forceMax ? "MAX" : "NORMAL", side: "L", editable: true, cyclable: true },
-    { key: "status",  label: "",         value: perfStatus, side: "C", editable: false, small: true, error: perfStatusErr },
+    { key: "antiice", label: "ANTI-ICE",     value: antiIce ? "ON" : "AUTO", side: "L", editable: true, cyclable: true },
+    { key: "flaps",   label: "FLAPS",        value: flapSel,                 side: "L", editable: true, cyclable: true },
+    { key: "thrust",  label: "THRUST",       value: forceMax ? "MAX" : "OPTIMUM", side: "L", editable: true, cyclable: true },
+    { key: "llws",    label: "LLWS ADVISORY",value: llwsAdvisory ? "YES" : "NO", side: "L", editable: true, cyclable: true },
+    { key: "status",  label: "",             value: perfStatus, side: "C", editable: false, small: true, error: perfStatusErr },
   ] : [];
 
   async function handleExec() {
@@ -272,15 +310,19 @@ export default function CduApp() {
     setPerfStatus("GENERATING...");
     setPerfStatusErr(false);
     try {
+      // GUST is its own field on the real screen, but the backend's "wind"
+      // param is a single display string — append it the same way the
+      // real printed reports show gust (e.g. "270/15G25").
+      const windStr = gust.trim() ? `${wind}G${gust.trim()}` : wind;
       const result = await apiGenerateTps({
         xml_data: xmlData,
         mode: "tps",
         scenario: surface,
         condOverride: conditionsEdited,
-        oat, qnh, wind,
+        oat, qnh, wind: windStr,
         antiIce,
         runways,
-        speedOverrides: flapSel !== "OPT" ? { flaps: flapSel } : {},
+        speedOverrides: flapSel !== "OPTIMUM" ? { flaps: flapSel } : {},
         forceMax,
       });
       setTpsResult(result.tps);
@@ -410,7 +452,7 @@ export default function CduApp() {
     };
   } else if (page === "COND1") {
     cduProps = {
-      title: "ACARS T/O CONDITION", pageNum: "1/2",
+      title: "ACARS TO CONDITIONS", pageNum: "1/2",
       fields: cond1Fields,
       onFieldCommit: handleCond1Commit,
       execAvailable: false,
@@ -421,7 +463,7 @@ export default function CduApp() {
     };
   } else if (page === "COND2") {
     cduProps = {
-      title: "ACARS T/O CONDITION", pageNum: "2/2",
+      title: "ACARS TO CONDITIONS", pageNum: "2/2",
       fields: cond2Fields,
       onFieldCommit: handleCond2Commit,
       execAvailable: !!xmlData && [runway1, runway2, runway3].some(r => r.trim()) && !generating,
