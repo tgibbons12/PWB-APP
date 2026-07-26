@@ -66,9 +66,9 @@ function validateField(fieldKey, raw) {
 
 // One line-pair: a label line (small, dim) and a data line (large, bright).
 // side: "L" | "R" | "C" (center, no LSK)
-function CduLine({ label, value, side, editable, small, error, cyclable, returnLine }) {
+function CduLine({ label, value, side, editable, small, error, cyclable, returnLine, returnLabel }) {
   const displayValue = returnLine
-    ? "<RETURN>"
+    ? (returnLabel || "<RETURN>")
     : value
       ? `${cyclable && editable ? "↓" : ""}${value}`
       : (editable ? "----" : " ");
@@ -184,12 +184,12 @@ export default function CduEmulator({
               <div className="cdu-screen-top">
                 <div className="cdu-col cdu-col-left">
                   {leftFields.map((f, i) => (
-                    <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} />
+                    <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} />
                   ))}
                 </div>
                 <div className="cdu-col cdu-col-right">
                   {rightFields.map((f, i) => (
-                    <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} />
+                    <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} />
                   ))}
                 </div>
               </div>
@@ -200,7 +200,7 @@ export default function CduEmulator({
                   the left/right column content. */}
               <div className="cdu-col cdu-col-center">
                 {centerFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} />
+                  <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} />
                 ))}
               </div>
             </div>
@@ -346,7 +346,11 @@ const CDU_CSS = `
 .cdu-light-l { left: 22px; } .cdu-light-r { right: 22px; }
 
 .cdu-screen-frame { background: #4a4e53; border-radius: 10px; padding: 12px; margin: 30px 4px 14px; }
-.cdu-screen { background: #050505; border-radius: 4px; padding: 10px 12px; min-height: 260px;
+/* Fixed height (not min-height) — a real CDU screen is a physical fixed-size
+   panel, so it must stay the same size on every page. Pages with more
+   content than fits (long ACARS reports) scroll internally instead of
+   growing the screen and changing the whole unit's aspect ratio. */
+.cdu-screen { background: #050505; border-radius: 4px; padding: 10px 12px; height: 260px;
   display: flex; flex-direction: column; font-family: "Menlo","Courier New",monospace; }
 .cdu-screen-header { display: flex; justify-content: space-between; color: #eaeaea;
   font-size: 13px; font-weight: 700; letter-spacing: 1px; padding-bottom: 4px; border-bottom: 1px solid #333; }

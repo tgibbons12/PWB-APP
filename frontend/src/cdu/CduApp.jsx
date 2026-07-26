@@ -221,7 +221,9 @@ export default function CduApp() {
     { key: "wind",    label: "WIND",       value: String(wind), side: "R", editable: true },
     { key: "oatqnh",  label: "OAT/QNH",    value: `${oat}/${qnh}`, side: "R", editable: true },
     { key: "status",  label: "",           value: perfStatus, side: "C", editable: false, small: true, error: perfStatusErr },
-    { key: "return",  label: "",           value: "", side: "C", editable: true, returnLine: true },
+    // Real screen shows "<PERF/M&B" here (LSK 6L, returns to the ACARS RWY
+    // PERF/W&B menu), not a generic "<RETURN>" — per the POH page 1/2 screen.
+    { key: "return",  label: "",           value: "", side: "C", editable: true, returnLine: true, returnLabel: "<PERF/M&B" },
   ] : [];
 
   // ── ACARS T/O CONDITION 2/2 — FLAP, ANTI-ICE, THRUST, then SEND/DLK/EXEC ──
