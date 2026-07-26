@@ -207,10 +207,16 @@ export default function CduApp() {
     }
   }
 
+  // "KIND" on the real screen isn't a literal word — it's the departure
+  // airport's ICAO code shown above the entry line (e.g. "KIND" for
+  // Indianapolis, per the POH's own worked example), confirming which
+  // airport RWY 1/2/3 apply to. Render it from the loaded flight plan
+  // instead of the literal string "KIND".
+  const depIcao = xmlData?.origin_icao || "----";
   const cond1Fields = xmlData ? [
-    { key: "rwy1",    label: "KIND RWY 1", value: runway1, side: "L", editable: true, cyclable: true },
-    { key: "rwy2",    label: "KIND RWY 2", value: runway2, side: "L", editable: true, cyclable: true },
-    { key: "rwy3",    label: "KIND RWY 3", value: runway3, side: "L", editable: true, cyclable: true },
+    { key: "rwy1",    label: `${depIcao} RWY 1`, value: runway1, side: "L", editable: true, cyclable: true },
+    { key: "rwy2",    label: `${depIcao} RWY 2`, value: runway2, side: "L", editable: true, cyclable: true },
+    { key: "rwy3",    label: `${depIcao} RWY 3`, value: runway3, side: "L", editable: true, cyclable: true },
     { key: "surface", label: "SURFACE",    value: SURFACE_LABELS[surface] ?? surface, side: "L", editable: true, cyclable: true },
     { key: "wind",    label: "WIND",       value: String(wind), side: "R", editable: true },
     { key: "oatqnh",  label: "OAT/QNH",    value: `${oat}/${qnh}`, side: "R", editable: true },

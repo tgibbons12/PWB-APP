@@ -73,7 +73,7 @@ function CduLine({ label, value, side, editable, small, error, cyclable, returnL
       ? `${cyclable && editable ? "↓" : ""}${value}`
       : (editable ? "----" : " ");
   return (
-    <div className={`cdu-line cdu-line-${side}`}>
+    <div className={`cdu-line cdu-line-${side} ${returnLine ? "cdu-line-return-wrap" : ""}`}>
       {label && <div className="cdu-line-label">{label}</div>}
       <div className={`cdu-line-value ${editable ? "cdu-editable" : ""} ${small ? "cdu-line-small" : ""} ${error ? "cdu-line-error" : ""} ${returnLine ? "cdu-return-line" : ""}`}>
         {displayValue}
@@ -164,6 +164,7 @@ export default function CduEmulator({
       <style>{CDU_CSS}</style>
 
       <div className="cdu-unit">
+        <div className="cdu-wordmark">Honeywell</div>
         <div className="cdu-screw cdu-screw-tl" />
         <div className="cdu-screw cdu-screw-tr" />
         <div className="cdu-screw cdu-screw-bl" />
@@ -180,19 +181,26 @@ export default function CduEmulator({
             </div>
 
             <div className="cdu-screen-body">
-              <div className="cdu-col cdu-col-left">
-                {leftFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} />
-                ))}
+              <div className="cdu-screen-top">
+                <div className="cdu-col cdu-col-left">
+                  {leftFields.map((f, i) => (
+                    <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} />
+                  ))}
+                </div>
+                <div className="cdu-col cdu-col-right">
+                  {rightFields.map((f, i) => (
+                    <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} />
+                  ))}
+                </div>
               </div>
+              {/* Center lines (status messages, RETURN, report body text) are
+                  pinned to the BOTTOM of the screen via margin-top:auto below
+                  — matching real CDU pages, where RETURN always sits on the
+                  last LSK row rather than wherever it happens to fall after
+                  the left/right column content. */}
               <div className="cdu-col cdu-col-center">
                 {centerFields.map((f, i) => (
                   <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} />
-                ))}
-              </div>
-              <div className="cdu-col cdu-col-right">
-                {rightFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} />
                 ))}
               </div>
             </div>
@@ -314,12 +322,17 @@ const CDU_CSS = `
 .cdu-unit {
   position: relative;
   width: 460px;
-  background: linear-gradient(180deg, #9a9ea3, #7d8186);
+  /* Cooler blue-grey brushed-metal tone matching the real Honeywell Primus
+     Epic MCDU faceplate used on the E-Jet (reference photo), vs. the warmer
+     neutral grey this used before. */
+  background: linear-gradient(180deg, #9fa6ae, #7d8590);
   border-radius: 18px;
-  padding: 22px 18px 18px;
+  padding: 26px 18px 18px;
   box-shadow: 0 10px 30px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.15);
   font-family: "Segoe UI", Helvetica, Arial, sans-serif;
 }
+.cdu-wordmark { position: absolute; top: 8px; left: 14px; color: #e8eaed; font-size: 11px;
+  font-weight: 700; letter-spacing: 0.5px; font-style: italic; opacity: 0.85; }
 .cdu-screw { position: absolute; width: 20px; height: 20px; border-radius: 50%;
   background: radial-gradient(circle at 35% 35%, #d8d8d8, #8a8a8a 60%, #5a5a5a);
   box-shadow: inset 0 0 0 2px rgba(0,0,0,0.3); }
@@ -338,10 +351,16 @@ const CDU_CSS = `
 .cdu-screen-header { display: flex; justify-content: space-between; color: #eaeaea;
   font-size: 13px; font-weight: 700; letter-spacing: 1px; padding-bottom: 4px; border-bottom: 1px solid #333; }
 .cdu-page-num { color: #7fd0ff; font-weight: 400; }
-.cdu-screen-body { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; padding-top: 4px; overflow-y: auto; }
+.cdu-screen-body { flex: 1; display: flex; flex-direction: column; padding-top: 4px; overflow-y: auto; }
+.cdu-screen-top { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; flex-shrink: 0; }
 .cdu-col { display: flex; flex-direction: column; gap: 6px; }
-.cdu-col-left { grid-column: 1; } .cdu-col-right { grid-column: 2; }
-.cdu-col-center { grid-column: 1 / span 2; }
+/* Center column stretches to fill remaining screen height so a trailing
+   RETURN line can be pinned to the very bottom (see .cdu-line-return-wrap)
+   instead of floating right after whatever content precedes it. Report/
+   print pages with no RETURN field (just paginated text) are unaffected —
+   they stay naturally top-anchored. */
+.cdu-col-center { flex: 1; min-height: 0; padding-top: 10px; }
+.cdu-line-return-wrap { margin-top: auto; }
 
 .cdu-line { display: flex; flex-direction: column; line-height: 1.15; }
 .cdu-line-label { color: #7fd0ff; font-size: 10.5px; letter-spacing: 0.5px; }
@@ -365,7 +384,7 @@ const CDU_CSS = `
 .cdu-lsk:active { transform: translateY(1px); box-shadow: inset 0 1px 3px rgba(0,0,0,0.8); }
 .cdu-lsk-notch { display: block; width: 16px; height: 2px; background: #ccc; margin: 6px auto 0; }
 
-.cdu-func-panel { background: #86898d; border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.cdu-func-panel { background: #8b9198; border-radius: 8px; padding: 8px; margin-bottom: 8px; }
 .cdu-func-row { display: flex; gap: 4px; margin-bottom: 4px; }
 .cdu-func-row:last-child { margin-bottom: 0; }
 .cdu-func-key { flex: 1; background: linear-gradient(180deg, #2b2b2e, #101012); color: #eee;
@@ -375,12 +394,12 @@ const CDU_CSS = `
 .cdu-exec-key { opacity: 0.45; }
 .cdu-exec-active { opacity: 1; box-shadow: 0 0 8px #3f8, inset 0 1px 0 rgba(255,255,255,0.2); }
 
-.cdu-brt-dim { position: absolute; top: 340px; right: -6px; background: #86898d; border-radius: 6px;
+.cdu-brt-dim { position: absolute; top: 340px; right: -6px; background: #8b9198; border-radius: 6px;
   padding: 4px; display: flex; flex-direction: column; gap: 4px; }
 .cdu-brt-key { background: linear-gradient(180deg, #2b2b2e, #101012); color: #eee; border: 1px solid #000;
   border-radius: 4px; font-size: 9px; font-weight: 700; padding: 4px 8px; cursor: pointer; }
 
-.cdu-keypad { background: #75787c; border-radius: 8px; padding: 10px; display: flex; gap: 10px; }
+.cdu-keypad { background: #7a8089; border-radius: 8px; padding: 10px; display: flex; gap: 10px; }
 .cdu-alpha-grid { flex: 1; display: flex; flex-direction: column; gap: 5px; }
 .cdu-num-grid { display: flex; flex-direction: column; gap: 5px; }
 .cdu-key-row { display: flex; gap: 5px; }
