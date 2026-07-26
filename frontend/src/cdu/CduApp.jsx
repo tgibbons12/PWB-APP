@@ -157,6 +157,15 @@ export default function CduApp() {
   const [closet, setCloset] = useState("65"); // POH default: 65 lb
   const [toFuel, setToFuel] = useState("");
   const [blstFuel, setBlstFuel] = useState("");
+  // ACARS LOADSHEET 2/2 — the POH's "PAX DETAIL" page (p.9-75): per-section
+  // EXTRA or TOTAL passenger weight, used for charter ops where actual
+  // weights are required. CG lives here too: the backend needs a CG% to
+  // compute weight & balance and there's nowhere else in this page set to
+  // type one (the real system gets it from the host, we don't).
+  const [paxWtA, setPaxWtA] = useState("");
+  const [paxWtB, setPaxWtB] = useState("");
+  const [paxWtC, setPaxWtC] = useState("");
+  const [cgPercent, setCgPercent] = useState("25.0");
 
   // ── Data helpers ──────────────────────────────────────────────────────────
   const runwayIds = xmlData?.valid_runways?.map(r => r.id) ?? [];
@@ -313,7 +322,44 @@ export default function CduApp() {
     { key: "send",      label: "DATALINK",   value: "SEND*", side: "R", editable: true, selectable: true, tone: "white" },
     { key: "ttlpax",  label: "TTL PAX",
       value: String(sumPair(adChA) + sumPair(adChB) + sumPair(adChC)),
-      side: "C", editable: false, tone: "green", small: true },
+      side: "C", row: 0, editable: false, tone: "green" },
+  ];
+
+  // ── ACARS PAX DETAIL — LOADSHEET page 2/2 (POH p.9-75) ─────────────────────
+  function handlePaxDetailCommit(key, value) {
+    if (key === "return") { setPage("LOADSHEET"); return; }
+    if (key === "clearall") {
+      setPaxWtA(""); setPaxWtB(""); setPaxWtC("");
+      return;
+    }
+    if (key === "cg") {
+      if (value === DELETE_TOKEN) { setCgPercent("25.0"); return; }
+      const n = parseFloat(value);
+      if (!Number.isFinite(n) || n < 5 || n > 45) return { error: "INVALID ENTRY" };
+      setCgPercent(value);
+      return;
+    }
+    const setters = { paxa: setPaxWtA, paxb: setPaxWtB, paxc: setPaxWtC };
+    const setter = setters[key];
+    if (!setter) return;
+    if (value === DELETE_TOKEN) { setter(""); return; }
+    if (!/^\d{1,6}$/.test(value)) return { error: "INVALID ENTRY" };
+    setter(value);
+  }
+
+  const paxDetailFields = [
+    { key: "paxa",     label: "SEC A WEIGHT", value: paxWtA,    side: "L", editable: true, tone: "cyan" },
+    { key: "paxb",     label: "SEC B WEIGHT", value: paxWtB,    side: "L", editable: true, tone: "cyan" },
+    { key: "paxc",     label: "SEC C WEIGHT", value: paxWtC,    side: "L", editable: true, tone: "cyan" },
+    { key: "cg",       label: "CG %MAC",      value: cgPercent, side: "L", editable: true, tone: "amber" },
+    { key: "_pd1",     label: "",             value: "",         side: "L", editable: false },
+    { key: "return",   label: "",             value: "<RETURN",  side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "_pd2",     label: "",             value: "",         side: "R", editable: false },
+    { key: "_pd3",     label: "",             value: "",         side: "R", editable: false },
+    { key: "_pd4",     label: "",             value: "",         side: "R", editable: false },
+    { key: "_pd5",     label: "",             value: "",         side: "R", editable: false },
+    { key: "_pd6",     label: "",             value: "",         side: "R", editable: false },
+    { key: "clearall", label: "",             value: "CLEAR ALL>", side: "R", editable: true, selectable: true, tone: "white" },
   ];
 
   // ── IDENT page ─────────────────────────────────────────────────────────────
@@ -421,11 +467,9 @@ export default function CduApp() {
       { key: "dest", label: "DEST",   value: xmlData.dest_icao || "", side: "R", editable: true, tone: "amber" },
       { key: "ac",   label: "A/C",    value: xmlData.icaocode, side: "R", editable: false, tone: "green" },
     ] : []),
-    { key: "return", label: "", value: "", side: "L", editable: true, returnLine: true },
     // POH p.9-62 LSK 6R: DATALINK AUTO INIT* — fetches the flight data. This
     // is how the OFP is pulled now that there's no EXEC key on the chassis.
     { key: "autoinit", label: "DATALINK", value: "AUTO INIT*", side: "R", editable: true, selectable: true, tone: "white" },
-    { key: "status", label: "", value: identStatus, side: "C", editable: false, small: true, error: identStatusErr },
   ];
 
   // ── ACARS T/O CONDITION 1/2 (POH p.9-70/71) ────────────────────────────────
@@ -523,7 +567,7 @@ export default function CduApp() {
     { key: "rwy3",     label: `${depIcao} RWY 3`, value: runway3, side: "L", editable: true, cyclable: true, tone: "cyan" },
     { key: "surface",  label: "SURFACE",   value: SURFACE_LABELS[surface] ?? surface, side: "L", editable: true, cyclable: true, tone: "cyan" },
     { key: "level",    label: "LEVEL",     value: "---",           side: "L", dim: true, dimLabel: "CONTAM LEVEL" },
-    { key: "return",   label: "",          value: "",              side: "L", editable: true, returnLine: true, returnLabel: "<PERF/W&B" },
+    { key: "return",   label: "",          value: "<PERF/W&B",     side: "L", editable: true, selectable: true, tone: "white" },
     { key: "wind",       label: "WIND",        value: String(wind),    side: "R", editable: true, tone: "amber" },
     { key: "oatqnh",     label: "OAT C/QNH",   value: `${oat}/${qnh}`, side: "R", editable: true, tone: "amber" },
     { key: "ptow",       label: "PTOW",        value: ptow,            side: "R", editable: true, tone: "cyan" },
@@ -532,7 +576,6 @@ export default function CduApp() {
       error: !!relVersion && relVersion !== String(ofpRelease) },
     { key: "gotols",     label: "W&B",         value: "LOADSHEET>",    side: "R", editable: true, selectable: true, tone: "white" },
     { key: "send",       label: "DATALINK",    value: "SEND*",         side: "R", editable: true, selectable: true, tone: "white" },
-    { key: "status",   label: "",          value: perfStatus, side: "C", editable: false, small: true, error: perfStatusErr },
   ] : [];
 
   // ── ACARS TO CONDITIONS 2/2 — ANTI-ICE, FLAPS, THRUST, LLWS ADVISORY ───────
@@ -594,7 +637,6 @@ export default function CduApp() {
     { key: "flaps",   label: "FLAPS",        value: flapSel,                 side: "L", editable: true, cyclable: true },
     { key: "thrust",  label: "THRUST",       value: forceMax ? "MAX" : "OPTIMUM", side: "L", editable: true, cyclable: true },
     { key: "llws",    label: "LLWS ADVISORY",value: llwsAdvisory ? "YES" : "NO", side: "L", editable: true, cyclable: true },
-    { key: "status",  label: "",             value: perfStatus, side: "C", editable: false, small: true, error: perfStatusErr },
   ] : [];
 
   async function handleExec() {
@@ -627,6 +669,7 @@ export default function CduApp() {
         ...(lsPax   > 0 ? { pax: lsPax }     : {}),
         ...(lsCargo > 0 ? { cargo: lsCargo } : {}),
         ...(Number.isFinite(lsFuel) && lsFuel > 0 ? { ramp: lsFuel } : {}),
+        ...(Number.isFinite(parseFloat(cgPercent)) ? { cg: parseFloat(cgPercent) } : {}),
       });
       setTpsResult(result.tps);
       setPrintPageIndex(0);
@@ -650,9 +693,9 @@ export default function CduApp() {
   // REMARKS, then ONE TAKEOFF PERFORMANCE page per requested runway (up to
   // 3 — matches the real system's KIND RWY 1/2/3 limit and its "pages 3/5,
   // 4/5, 5/5 are identical, one per runway request" pagination).
-  function handleAcarsCommit(key, value) {
-    if (key === "return" && value === null) setPage("COND2");
-  }
+  // Report pages are read-only; PREV/PERF/MENU navigate away (there are no
+  // <RETURN> lines any more).
+  function handleAcarsCommit() {}
 
   // Center column is PACKED two-values-per-row (same technique the real
   // AeroData printout uses) instead of one field per line — with all 6 of
@@ -680,26 +723,46 @@ export default function CduApp() {
     { key: "secc",  label: "SEC C",    value: String(loadsheetSummary.sect_c_pax),   side: "L", editable: false, tone: "green" },
     { key: "totpax",label: "TTL PAX",  value: String(loadsheetSummary.ttl_pax),      side: "C", row: 4, editable: false, tone: "green" },
     { key: "zfw",   label: "ZFW/CG",   value: String(loadsheetSummary.zfw_cg),       side: "R", editable: false, tone: "green" },
-    { key: "return",label: "",         value: "",                                    side: "L", editable: true, returnLine: true },
-    { key: "status",label: "",         value: loadsheetSummary.takeoff_data_avail ? "TAKEOFF DATA AVAIL" : "NO TAKEOFF DATA AVAIL", side: "C", row: 5, editable: false, small: true, error: !loadsheetSummary.takeoff_data_avail, tone: "green" },
+    // TAKEOFF DATA AVAIL is posted to the SCRATCHPAD (see acarsMessage), not
+    // rendered as a screen line — that's where the real unit puts it.
   ] : [];
 
   // REMARKS page (POH p.9-77): a "REMARKS" heading in label colour with the
   // remark lines beneath it in AeroData green — not an undifferentiated wall
   // of plain text. Lines are laid onto the grid's left column so they sit on
-  // their own rows and stay pinned to the LSKs, with <RETURN at 6L.
+  // their own rows and stay pinned to the LSKs.
   const acarsRemarksFields = loadsheetSummary ? (() => {
     const lines = (loadsheetSummary.remarks ?? []).filter(rl => String(rl).trim());
     return [
       { key: "hdr", label: "REMARKS", value: lines[0] || " ", side: "L", editable: false, tone: "green" },
-      ...lines.slice(1, 5).map((rl, i) => ({
+      ...lines.slice(1, 6).map((rl, i) => ({
         key: `rl${i}`, label: "", value: rl, side: "L", editable: false, tone: "green",
       })),
-      // Pad so <RETURN always lands on 6L like the real page.
-      ...Array.from({ length: Math.max(0, 5 - Math.max(1, lines.length)) }, (_, i) => ({
-        key: `pad${i}`, label: "", value: " ", side: "L", editable: false,
+    ];
+  })() : [];
+
+  // EFP / special-departure page — engine-failure procedure text for this
+  // airport. The printed AERODATA report puts this under a "SPECIAL" header
+  // wrapped to the column width; same treatment here, wrapped to the CDU's
+  // 24-char line so it reads identically.
+  const efpText = loadsheetSummary?.efp_text || "";
+  function wrapText(s, width) {
+    const out = [];
+    let line = "";
+    for (const w of String(s).split(/\s+/).filter(Boolean)) {
+      if ((line + " " + w).trim().length > width) { if (line) out.push(line); line = w; }
+      else line = (line ? line + " " : "") + w;
+    }
+    if (line) out.push(line);
+    return out;
+  }
+  const acarsEfpFields = efpText ? (() => {
+    const lines = wrapText(efpText, 24);
+    return [
+      { key: "efphdr", label: "SPECIAL", value: lines[0] || " ", side: "L", editable: false, tone: "green" },
+      ...lines.slice(1, 6).map((l, i) => ({
+        key: `efp${i}`, label: "", value: l, side: "L", editable: false, tone: "green",
       })),
-      { key: "return", label: "", value: "", side: "L", editable: true, returnLine: true },
     ];
   })() : [];
 
@@ -735,25 +798,28 @@ export default function CduApp() {
       ...(rd.n1
         ? [{ key: "thr", label: rd.thr_label || "THR", value: String(rd.n1), side: "R", editable: false, tone: "green" }]
         : []),
-      { key: "return",label: "",         value: "",                    side: "L", editable: true, returnLine: true },
     ];
   }
 
   const perfPages = runwayResults.length
     ? runwayResults.map(rd => ({ title: "ACARS T/O RWY DATA", fields: buildPerfFields(rd) }))
-    : [{
-        title: "ACARS T/O RWY DATA",
-        fields: [
-          { key: "none",   label: "", value: "NO TAKEOFF DATA AVAIL", side: "C", editable: false, error: true },
-          { key: "return", label: "", value: "", side: "C", editable: true, returnLine: true },
-        ],
-      }];
+    : [{ title: "ACARS T/O RWY DATA", fields: [] }];
 
   const ACARS_PAGES = [
     { title: "ACARS T/O RWY DATA", fields: acarsSummaryFields },
     { title: "ACARS T/O RWY DATA", fields: acarsRemarksFields },
+    ...(acarsEfpFields.length ? [{ title: "ACARS T/O RWY DATA", fields: acarsEfpFields }] : []),
     ...perfPages,
   ];
+
+  // Posted to the scratchpad rather than drawn on the page — the real unit
+  // shows TAKEOFF DATA AVAIL / NO TAKEOFF DATA AVAIL there, and the crew
+  // clears it with one CLR or DEL.
+  const acarsMessage = loadsheetSummary
+    ? (loadsheetSummary.takeoff_data_avail
+        ? { text: "TAKEOFF DATA AVAIL", error: false }
+        : { text: "NO TAKEOFF DATA AVAIL", error: true })
+    : { text: "NO TAKEOFF DATA AVAIL", error: true };
 
   // The generated .txt is downloadable (FPL key) but is no longer shown as a
   // paginated on-screen page — a real CDU never displays a raw report dump,
@@ -799,7 +865,17 @@ export default function CduApp() {
       onFieldCommit: handleLoadsheetCommit,
       execAvailable: false, // no EXEC key on this unit — send is LSK 6R SEND*
       onPrev: () => setPage("PERFWB"),
-      onNext: () => setPage("COND1"),
+      onNext: () => setPage("PAXDETAIL"), // 1/2 -> 2/2
+      onPerf: () => setPage("PERFWB"),
+    };
+  } else if (page === "PAXDETAIL") {
+    cduProps = {
+      title: "ACARS  PAX DETAIL", pageNum: "2/2",
+      fields: paxDetailFields,
+      onFieldCommit: handlePaxDetailCommit,
+      execAvailable: false,
+      onPrev: () => setPage("LOADSHEET"),
+      onNext: () => setPage("LOADSHEET"),
       onPerf: () => setPage("PERFWB"),
     };
   } else if (page === "IDENT") {
@@ -808,6 +884,7 @@ export default function CduApp() {
       fields: identFields,
       onFieldCommit: handleIdentCommit,
       execAvailable: false, // no EXEC key — fetch is LSK 6R AUTO INIT*
+      message: identStatus ? { text: identStatus, error: identStatusErr } : undefined,
       onPrev: () => setPage("ACARSMENU"),
       onNext: xmlData ? () => setPage("PERFWB") : undefined,
       onPerf: xmlData ? () => setPage("PERFWB") : undefined,
@@ -818,6 +895,7 @@ export default function CduApp() {
       fields: cond1Fields,
       onFieldCommit: handleCond1Commit,
       execAvailable: false,
+      message: perfStatus ? { text: perfStatus, error: perfStatusErr } : undefined,
       onPrev: () => setPage("PERFWB"),
       onNext: () => setPage("COND2"),
       onPerf: () => setPage("PERFWB"),
@@ -843,6 +921,7 @@ export default function CduApp() {
       fields: cur.fields,
       onFieldCommit: handleAcarsCommit,
       execAvailable: false,
+      message: acarsMessage,
       onPrev: () => {
         if (acarsPageIndex > 0) setAcarsPageIndex(i => i - 1);
         else setPage("COND2");

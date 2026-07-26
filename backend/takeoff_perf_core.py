@@ -2152,6 +2152,13 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
             "ttl_pax": pax,
             "remarks": remarks[1:],  # drop the leading "REMARKS" header token
             "takeoff_data_avail": True,
+            # Engine-failure / special-departure text for this airport. The
+            # printed report puts this under a "SPECIAL" header wrapped to the
+            # column width (see the EFP block at the end of this function);
+            # the CDU renders it the same way on its own page.
+            "efp_text": (
+                (airport_altitudes.get('EFP', '') if airport_altitudes else '') or ''
+            ).strip(),
         }
 
         for rl in remarks:

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import ejetChassis from "./ejet.453de855.png";
 
 // ─── CDU EMULATOR ───────────────────────────────────────────────────────────
@@ -30,8 +30,9 @@ import ejetChassis from "./ejet.453de855.png";
 //   MENU DLK NEXT EXEC TRS RADIO
 // and on-screen: a down-arrow (↓) prefixes any field with a fixed set of
 // pilot-selectable options, unset free-entry fields show as a dashed
-// placeholder ("----"), and a sub-page can offer a <RETURN> line to go back
-// up a menu level.
+// placeholder ("----"). Navigation between pages is by the PREV/NEXT/PERF/
+// MENU keys and by named menu lines (e.g. "<PERF/W&B"); there are no generic
+// "<RETURN>" lines.
 //
 // Real CDU interaction pattern this replicates:
 //   1. Typing on the keypad appends characters to the SCRATCHPAD (bottom
@@ -46,8 +47,9 @@ import ejetChassis from "./ejet.453de855.png";
 //          small fixed set of choices — RUNWAY, SURFACE, ANTI-ICE — so
 //          the pilot isn't forced to type an exact string on every
 //          change; it is NOT how real CDU hardware behaves).
-//        - a field marked `returnLine: true` (a "<RETURN>" line) navigates
-//          back, same mechanism as cycling — see onFieldCommit's null arg.
+//        - a field marked `selectable: true` (a menu line such as
+//          "<PERF/W&B" or "SEND*") fires, same mechanism as cycling —
+//          see onFieldCommit's null arg.
 //        - otherwise the LSK is a no-op (matches real CDU: empty
 //          scratchpad + LSK = page navigation, not applicable here).
 //   4. Invalid entries show "INVALID ENTRY" (or whatever message
@@ -88,18 +90,16 @@ function validateField(fieldKey, raw) {
 
 // One line-pair: a label line (small, dim) and a data line (large, bright).
 // side: "L" | "R" | "C" (center, no LSK)
-function CduLine({ label, value, side, editable, small, error, cyclable, returnLine, returnLabel, tight, dim, tone }) {
-  const displayValue = returnLine
-    ? (returnLabel || "<RETURN>")
-    : value
-      ? `${cyclable && editable ? "↓" : ""}${value}`
-      : (editable ? "----" : " ");
+function CduLine({ label, value, side, editable, small, error, cyclable, tight, dim, tone }) {
+  const displayValue = value
+    ? `${cyclable && editable ? "↓" : ""}${value}`
+    : (editable ? "----" : " ");
   // Explicit `tone` wins; otherwise fall back to the old editable=green rule.
   const toneClass = dim ? "cdu-dim" : tone ? `cdu-tone-${tone}` : editable ? "cdu-editable" : "";
   return (
-    <div className={`cdu-line cdu-line-${side} ${tight ? "cdu-line-tight" : ""} ${returnLine ? "cdu-line-return-wrap" : ""}`}>
+    <div className={`cdu-line cdu-line-${side} ${tight ? "cdu-line-tight" : ""}`}>
       {label && <div className={`cdu-line-label ${dim ? "cdu-dim" : ""}`}>{label}</div>}
-      <div className={`cdu-line-value ${toneClass} ${small ? "cdu-line-small" : ""} ${error ? "cdu-line-error" : ""} ${returnLine ? "cdu-return-line" : ""}`}>
+      <div className={`cdu-line-value ${toneClass} ${small ? "cdu-line-small" : ""} ${error ? "cdu-line-error" : ""}`}>
         {displayValue}
       </div>
     </div>
@@ -156,21 +156,38 @@ export default function CduEmulator({
   onFpl,           // optional: FPL function key (repurposed as PRINT/DOWNLOAD on the TPS print page)
   onDlk,           // optional: DLK function key (repurposed as "send ACARS request" — same trigger as EXEC, matches the real workflow where DLK sends the datalink request; on the MENU page it's repurposed again as "enter the ACARS app")
   onMenu,          // optional: MENU function key — real hardware always jumps to the top-level MENU page from anywhere
+  message,         // optional: { text, error } system message (e.g. "TAKEOFF DATA AVAIL"). Real CDUs post these to the scratchpad, not as a screen line, and the crew clears them with CLR/DEL.
 }) {
   const [scratchpad, setScratchpad] = useState("");
   const [scratchIsError, setScratchIsError] = useState(false);
 
+  // System messages land in the scratchpad exactly like the real unit. They
+  // clear on a SINGLE CLR or DEL press (they aren't typed text, so
+  // backspacing through them character by character would be wrong).
+  const [scratchIsSystem, setScratchIsSystem] = useState(false);
+  const msgText = message?.text || "";
+  useEffect(() => {
+    if (!msgText) return;
+    setScratchpad(msgText);
+    setScratchIsError(!!message?.error);
+    setScratchIsSystem(true);
+  }, [msgText, message?.error]);
+
   const appendChar = useCallback((ch) => {
     setScratchIsError(false);
-    setScratchpad((s) => (s + ch).slice(0, 24)); // real CDU scratchpad is line-length limited
-  }, []);
+    // Typing over a posted system message replaces it rather than appending.
+    setScratchpad((s) => (scratchIsSystem ? ch : (s + ch).slice(0, 24)));
+    setScratchIsSystem(false);
+  }, [scratchIsSystem]);
 
   const handleClr = useCallback(() => {
     setScratchIsError(false);
-    // *DELETE* is inserted as a single unit (not typed char-by-char), so one
-    // CLR press clears it entirely rather than backspacing one character.
+    // A system message and *DELETE* are both inserted as single units (not
+    // typed char-by-char), so one CLR press clears either outright rather
+    // than backspacing through them one character at a time.
+    if (scratchIsSystem) { setScratchpad(""); setScratchIsSystem(false); return; }
     setScratchpad((s) => (s === DELETE_TOKEN ? "" : s.slice(0, -1)));
-  }, []);
+  }, [scratchIsSystem]);
 
   // Real Honeywell/AeroData CDU convention: DEL does NOT erase the
   // scratchpad. It loads the scratchpad with the "*DELETE*" prompt; the
@@ -180,8 +197,10 @@ export default function CduEmulator({
   // as typing a value and pressing an LSK.
   const handleDel = useCallback(() => {
     setScratchIsError(false);
+    // With a system message posted, DEL just dismisses it (one press).
+    if (scratchIsSystem) { setScratchpad(""); setScratchIsSystem(false); return; }
     setScratchpad(DELETE_TOKEN);
-  }, []);
+  }, [scratchIsSystem]);
 
   const handleLsk = useCallback((field) => {
     if (!field) return; // clicked an LSK with nothing bound on that line
@@ -195,7 +214,7 @@ export default function CduEmulator({
     }
 
     if (!scratchpad) {
-      if (field.editable && (field.cyclable || field.returnLine || field.selectable)) {
+      if (field.editable && (field.cyclable || field.selectable)) {
         const result = onFieldCommit?.(field.key, null); // null = "cycle to next option" / "return" / "select"
         if (result && result.error) {
           setScratchpad(result.error);
@@ -237,6 +256,7 @@ export default function CduEmulator({
 
     setScratchpad("");
     setScratchIsError(false);
+    setScratchIsSystem(false);
   }, [scratchpad, onFieldCommit]);
 
   const handleUnimplemented = useCallback((label) => {
@@ -255,7 +275,7 @@ export default function CduEmulator({
   // every centre field was stacked underneath the L/R block, which made the
   // middle column look "sunken" and pushed content past the screen. A centre
   // field now opts into a row via `row: <0-5>`; anything without one still
-  // stacks below (status lines, <RETURN>, TPS PRINT text).
+  // stacks below.
   const ROW_COUNT = 6;
   const rowedCenter = centerFields.filter(f => Number.isInteger(f.row));
   const looseCenter = centerFields.filter(f => !Number.isInteger(f.row));
@@ -266,8 +286,8 @@ export default function CduEmulator({
   }));
   const renderCell = (f, side) => f
     ? <CduLine key={f.key} label={f.label} value={f.value} side={side} editable={f.editable}
-        small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine}
-        returnLabel={f.returnLabel} tight={f.tight} dim={f.dim} tone={f.tone} />
+        small={f.small} error={f.error} cyclable={f.cyclable}
+        tight={f.tight} dim={f.dim} tone={f.tone} />
     : null;
 
   return (
@@ -300,7 +320,7 @@ export default function CduEmulator({
                 {looseCenter.map((f, i) => (
                   f.pack
                     ? <CduPackLine key={f.key || i} pack={f.pack} tight={f.tight} />
-                    : <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} dim={f.dim} tone={f.tone} />
+                    : <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} tight={f.tight} dim={f.dim} tone={f.tone} />
                 ))}
               </div>
             )}
@@ -451,7 +471,6 @@ const CDU_CSS = `
   flex: 1 1 0; min-height: 0; column-gap: 1%; }
 .cdu-cell { min-width: 0; overflow: hidden; }
 .cdu-loose { display: flex; flex-direction: column; align-items: stretch; flex-shrink: 0; }
-.cdu-line-return-wrap { margin-top: 1%; }
 
 .cdu-line { display: flex; flex-direction: column; justify-content: center; line-height: 1.05; }
 .cdu-line-tight { line-height: 1; }
@@ -475,7 +494,6 @@ const CDU_CSS = `
 .cdu-tone-green { color: #4dff7c; }
 .cdu-dim { color: #5a5a5a; }
 .cdu-line-error { color: #ff5c4d; }
-.cdu-return-line { color: #f2f2f2; }
 .cdu-scratchpad { color: #fff; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw;
   border-top: 1px solid #333; margin-top: 1%; padding-top: 1%; min-height: 4.9cqw; flex-shrink: 0;
   white-space: nowrap; overflow: hidden; }
