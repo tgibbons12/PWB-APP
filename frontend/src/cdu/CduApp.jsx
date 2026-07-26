@@ -49,8 +49,9 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 //   ACARS TO CONDITIONS 1/2 — KLAX RWY 1/2/3 (departure ICAO + slot; a bare
 //                          runway id, or "RWY/INTXN" for an intersection
 //                          takeoff — up to 3 requested runways at once),
-//                          SURFACE, WIND, GUST (separate fields), OAT C/QNH
-//                          (one combined field), REL VERSION, PTOW
+//                          SURFACE, LEVEL, WIND, OAT C/QNH, PTOW, plus the
+//                          W&B LOADSHEET> / T/O DATA> shortcuts and
+//                          DATALINK SEND* (POH p.9-70)
 //   ACARS TO CONDITIONS 2/2 — ANTI-ICE (AUTO/ON), FLAPS (OPTIMUM/1/2/4),
 //                          THRUST (OPTIMUM/MAX), LLWS ADVISORY (NO/YES,
 //                          informational only) — DLK/EXEC sends the
@@ -66,10 +67,8 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 //   - No separate ACARS LOADSHEET request — the backend returns loadsheet
 //     summary + takeoff performance together in one call, so there's no
 //     standalone "W&B LOADSHEET>" shortcut page.
-//   - REL VERSION and PTOW are cosmetic only (not sent to the backend) —
-//     REL VERSION's purpose isn't documented anywhere available, and PTOW
-//     is discarded by the real system too once real loadsheet data exists,
-//     which ours always does.
+//   - PTOW is cosmetic only (not sent to the backend) — the real system
+//     discards it too once real loadsheet data exists, which ours always has.
 //   - No contamination depth (LEVEL 1/2/3) for SURFACE — the backend's TLR
 //     interpolation only has DRY/WET tables, not compacted-snow/wet-ice.
 //   - ANTI-ICE only has AUTO/ON (not AUTO/ON/OFF) and THRUST only has
@@ -113,7 +112,7 @@ export default function CduApp() {
   const [identStatus, setIdentStatus] = useState("ENTER SIMBRIEF ID");
   const [identStatusErr, setIdentStatusErr] = useState(false);
 
-  // ACARS TO CONDITIONS 1/2 — KLAX RWY 1/2/3, SURFACE, WIND, GUST, OAT/QNH
+  // ACARS TO CONDITIONS 1/2 — RWY 1/2/3, SURFACE, WIND, OAT/QNH, PTOW
   const [runway1, setRunway1] = useState("");
   const [runway2, setRunway2] = useState("");
   const [runway3, setRunway3] = useState("");
@@ -121,8 +120,8 @@ export default function CduApp() {
   const [oat, setOat] = useState("");
   const [qnh, setQnh] = useState("");
   const [wind, setWind] = useState("");
-  const [gust, setGust] = useState(""); // separate field from WIND on the real screen
-  const [relVersion, setRelVersion] = useState(""); // cosmetic only — not wired to the backend
+  // No GUST / REL VERSION state any more — the real page has neither (POH
+  // p.9-71: gust is typed into WIND itself, and only for a tailwind).
   const [ptow, setPtow] = useState(""); // cosmetic only — real system discards this once real loadsheet data exists, which ours always has
 
   // ACARS TO CONDITIONS 2/2 — ANTI-ICE, FLAPS, THRUST, LLWS ADVISORY
@@ -323,8 +322,6 @@ export default function CduApp() {
       setOat(data.temp);
       setQnh(data.qnh);
       setWind(data.wind);
-      setGust("");
-      setRelVersion("");
       setPtow("");
       setTpsResult(null);
       setPrintPageIndex(0);
@@ -356,26 +353,53 @@ export default function CduApp() {
     }
   }, []);
 
+  // ACARS INITIALIZE — the POH page (p.9-62) is FLT NO / SKED DAY, DEP /
+  // XPDR FLT ID / DEST, FUEL QTY / BD FUEL, crew IDs, <RETURN / AUTO INIT*.
+  // Ours substitutes a SimBrief ID for the crew-entry fields (that one entry
+  // supplies everything the real crew would type), then shows DEP and DEST
+  // in the same 2L/2R slots as the real page. DEP/DEST are editable so the
+  // pair can be corrected without re-fetching, and they drive the runway
+  // list and the "KAUS RWY n" labels on the conditions page.
   function handleIdentCommit(key, value) {
-    if (key !== "simbrief" || value === null) return;
-    doFetch(value);
+    if (key === "simbrief") {
+      if (value === null) return;
+      doFetch(value);
+      return;
+    }
+    if (key === "dep") {
+      if (!value || value === DELETE_TOKEN) return { error: "MANDATORY FIELD" };
+      const v = value.toUpperCase();
+      if (!/^[A-Z]{4}$/.test(v)) return { error: "INVALID ENTRY" };
+      setXmlData(d => (d ? { ...d, origin_icao: v } : d));
+      return;
+    }
+    if (key === "dest") {
+      if (!value || value === DELETE_TOKEN) return { error: "MANDATORY FIELD" };
+      const v = value.toUpperCase();
+      if (!/^[A-Z]{4}$/.test(v)) return { error: "INVALID ENTRY" };
+      setXmlData(d => (d ? { ...d, dest_icao: v } : d));
+      return;
+    }
+    if (key === "return") { setPage("ACARSMENU"); return; }
   }
 
   const identFields = [
-    { key: "simbrief", label: "SIMBRIEF ID", value: simbriefUsername, side: "L", editable: true },
-    { key: "status",   label: "STATUS",      value: identStatus,       side: "C", editable: false, small: true, error: identStatusErr },
+    { key: "simbrief", label: "SIMBRIEF ID", value: simbriefUsername, side: "L", editable: true, tone: "amber" },
     ...(xmlData ? [
-      { key: "flt",   label: "FLT NO", value: String(xmlData.flight_number), side: "R", editable: false },
-      { key: "rte",   label: "ROUTE",  value: `${xmlData.origin_iata}-${xmlData.dest_iata}`, side: "R", editable: false },
-      { key: "ac",    label: "A/C",    value: xmlData.icaocode, side: "R", editable: false },
+      { key: "dep",  label: "DEP",    value: xmlData.origin_icao || "", side: "L", editable: true, tone: "amber" },
+      { key: "fuel", label: "FUEL QTY", value: String(xmlData.plan_ramp_xml ?? ""), side: "L", editable: false, tone: "green" },
+      { key: "flt",  label: "FLT NO", value: String(xmlData.flight_number), side: "R", editable: false, tone: "green" },
+      { key: "dest", label: "DEST",   value: xmlData.dest_icao || "", side: "R", editable: true, tone: "amber" },
+      { key: "ac",   label: "A/C",    value: xmlData.icaocode, side: "R", editable: false, tone: "green" },
     ] : []),
+    { key: "return", label: "", value: "", side: "L", editable: true, returnLine: true },
+    { key: "status", label: "", value: identStatus, side: "C", editable: false, small: true, error: identStatusErr },
   ];
 
-  // ── ACARS TO CONDITIONS 1/2 — KLAX RWY 1/2/3, SURFACE, WIND, GUST, OAT/QNH ──
-  // Field set and exact wording confirmed against real E-Jet cockpit footage
-  // (Honeywell Primus Epic MCDU, "ACARS TO CONDITIONS 1/2"): "KLAX RWY 1/2/3"
-  // (departure ICAO + slot), SURFACE, WIND and GUST as two separate fields
-  // (not one combined string), "OAT C/QNH" combined, REL VERSION, PTOW.
+  // ── ACARS T/O CONDITION 1/2 (POH p.9-70/71) ────────────────────────────────
+  // "KIND RWY 1" on the POH screenshot is the departure ICAO + slot number,
+  // taken from the ACARS INITIALIZE page — so it renders from the loaded
+  // flight plan, not as a literal.
   function cycleRunwaySlot(current, setter) {
     const opts = ["", ...runwayIds];
     const idx = opts.indexOf(current);
@@ -412,9 +436,19 @@ export default function CduApp() {
       setSurface(mapped);
       return;
     }
+    // Shortcut keys (POH 4R/5R) and the DATALINK SEND* key (6R).
+    if (key === "gotols")   { setPage("LOADSHEET"); return; }
+    if (key === "gotodata") {
+      if (!tpsResult) return { error: "NO TAKEOFF DATA AVAIL" };
+      setAcarsPageIndex(0); setPage("ACARS");
+      return;
+    }
+    if (key === "send") {
+      if (![runway1, runway2, runway3].some(r => r.trim())) return { error: "ENTER RUNWAY 1" };
+      handleExec();
+      return;
+    }
     if (key === "wind")  { setWind(value === DELETE_TOKEN ? "" : value); return; }
-    if (key === "gust")  { setGust(value === DELETE_TOKEN ? "" : value); return; }
-    if (key === "relversion") { setRelVersion(value === DELETE_TOKEN ? "" : value); return; }
     if (key === "ptow")  { setPtow(value === DELETE_TOKEN ? "" : value); return; }
     if (key === "oatqnh") {
       if (value === DELETE_TOKEN) return { error: "NOT ALLOWED" }; // required field
@@ -429,18 +463,27 @@ export default function CduApp() {
   // airport's ICAO code shown above each entry line, confirming which
   // airport RWY 1/2/3 apply to. Render it from the loaded flight plan.
   const depIcao = xmlData?.origin_icao || "----";
+  // Exact POH p.9-70/71 layout. Note there is NO separate GUST field and no
+  // REL VERSION field on the real page — per p.9-71 LSK 1R, gust is folded
+  // into the WIND entry and only for a TAILWIND ("including the gust factor,
+  // the highest number in terms of velocity"). Those two extra lines used to
+  // sit here and pushed PTOW and everything below it off their LSKs.
+  // LEVEL (contamination depth) is greyed: the backend's TLR interpolation
+  // only carries DRY/WET tables, no compacted-snow/wet-ice depth data.
   const cond1Fields = xmlData ? [
-    { key: "rwy1",       label: `${depIcao} RWY 1`, value: runway1, side: "L", editable: true, cyclable: true },
-    { key: "rwy2",       label: `${depIcao} RWY 2`, value: runway2, side: "L", editable: true, cyclable: true },
-    { key: "rwy3",       label: `${depIcao} RWY 3`, value: runway3, side: "L", editable: true, cyclable: true },
-    { key: "surface",    label: "SURFACE",     value: SURFACE_LABELS[surface] ?? surface, side: "L", editable: true, cyclable: true },
-    { key: "wind",       label: "WIND",        value: String(wind), side: "R", editable: true },
-    { key: "gust",       label: "GUST",        value: String(gust), side: "R", editable: true },
-    { key: "oatqnh",     label: "OAT C/QNH",   value: `${oat}/${qnh}`, side: "R", editable: true },
-    { key: "relversion", label: "REL VERSION", value: relVersion, side: "R", editable: true },
-    { key: "ptow",       label: "PTOW",        value: ptow, side: "R", editable: true },
-    { key: "status",     label: "",            value: perfStatus, side: "C", editable: false, small: true, error: perfStatusErr },
-    { key: "return",     label: "",            value: "", side: "C", editable: true, returnLine: true },
+    { key: "rwy1",     label: `${depIcao} RWY 1`, value: runway1, side: "L", editable: true, cyclable: true, tone: "amber" },
+    { key: "rwy2",     label: `${depIcao} RWY 2`, value: runway2, side: "L", editable: true, cyclable: true, tone: "cyan" },
+    { key: "rwy3",     label: `${depIcao} RWY 3`, value: runway3, side: "L", editable: true, cyclable: true, tone: "cyan" },
+    { key: "surface",  label: "SURFACE",   value: SURFACE_LABELS[surface] ?? surface, side: "L", editable: true, cyclable: true, tone: "cyan" },
+    { key: "level",    label: "LEVEL",     value: "---",           side: "L", dim: true, dimLabel: "CONTAM LEVEL" },
+    { key: "return",   label: "",          value: "",              side: "L", editable: true, returnLine: true, returnLabel: "<PERF/M&B" },
+    { key: "wind",     label: "WIND",      value: String(wind),    side: "R", editable: true, tone: "amber" },
+    { key: "oatqnh",   label: "OAT C/QNH", value: `${oat}/${qnh}`, side: "R", editable: true, tone: "amber" },
+    { key: "ptow",     label: "PTOW",      value: ptow,            side: "R", editable: true, tone: "cyan" },
+    { key: "gotols",   label: "W&B",       value: "LOADSHEET>",    side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "gotodata", label: "T/O",       value: "DATA>",         side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "send",     label: "DATALINK",  value: "SEND*",         side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "status",   label: "",          value: perfStatus, side: "C", editable: false, small: true, error: perfStatusErr },
   ] : [];
 
   // ── ACARS TO CONDITIONS 2/2 — ANTI-ICE, FLAPS, THRUST, LLWS ADVISORY ───────
@@ -512,10 +555,10 @@ export default function CduApp() {
     setPerfStatus("GENERATING...");
     setPerfStatusErr(false);
     try {
-      // GUST is its own field on the real screen, but the backend's "wind"
-      // param is a single display string — append it the same way the
-      // real printed reports show gust (e.g. "270/15G25").
-      const windStr = gust.trim() ? `${wind}G${gust.trim()}` : wind;
+      // WIND is a single entry on the real page — the pilot types the gust
+      // into it directly when required (POH p.9-71), so it passes straight
+      // through to the backend's "wind" param as typed.
+      const windStr = wind;
       // ACARS LOADSHEET entries override the OFP's own pax/cargo/fuel — same
       // as the real system, where the loadsheet supersedes the planned figures
       // (and PTOW is discarded) once it's been filled in.
@@ -539,7 +582,7 @@ export default function CduApp() {
       setTpsResult(result.tps);
       setPrintPageIndex(0);
       setAcarsPageIndex(0);
-      setPerfStatus(`GENERATED — ${result.tps.filename}`);
+      setPerfStatus("");
       setPerfStatusErr(false);
       setPage("ACARS");
     } catch (e) {
@@ -568,30 +611,28 @@ export default function CduApp() {
   // to ~13 rows and overflowed the fixed-height screen, forcing an internal
   // scroll that real CDU hardware never does and that desynced the LSK
   // hit-targets from their labels. Packed + tight brings it to 9 rows.
+  // Real 3-column grid, matching POH p.9-76 row for row:
+  //   FLT NO | RLS NO   | TIME        WIND  | OAT C    | QNH
+  //   SEC A  | F BAG/WT | GTOW/CG     SEC B | A BAG/WT | FUEL
+  //   SEC C  | TTL PAX  | ZFW/CG      <RETURN | TAKEOFF DATA AVAIL
   const acarsSummaryFields = loadsheetSummary ? [
-    { key: "flt",   label: "FLT",        value: String(loadsheetSummary.flt_no),       side: "L", editable: false, tight: true },
-    { key: "rls",   label: "RLS",        value: String(loadsheetSummary.rls_no),       side: "L", editable: false, tight: true },
-    { key: "seca",  label: "SECT A",     value: String(loadsheetSummary.sect_a_pax),   side: "L", editable: false, tight: true },
-    { key: "secb",  label: "SECT B",     value: String(loadsheetSummary.sect_b_pax),   side: "L", editable: false, tight: true },
-    { key: "secc",  label: "SECT C",     value: String(loadsheetSummary.sect_c_pax),   side: "L", editable: false, tight: true },
-    { key: "time",  label: "TIME",       value: String(loadsheetSummary.time),         side: "R", editable: false, tight: true },
-    { key: "wind",  label: "WIND",       value: String(loadsheetSummary.wind),         side: "R", editable: false, tight: true },
-    { key: "oat",   label: "OAT C",      value: String(loadsheetSummary.oat),          side: "R", editable: false, tight: true },
-    { key: "qnh",   label: "QNH",        value: String(loadsheetSummary.qnh),          side: "R", editable: false, tight: true },
-    { key: "pk1",   side: "C", tight: true, pack: [
-        { label: "F CGO",   value: String(loadsheetSummary.sect_a_bagwt) },
-        { label: "GTOW/CG", value: String(loadsheetSummary.gtow_cg) },
-      ] },
-    { key: "pk2",   side: "C", tight: true, pack: [
-        { label: "A CGO",   value: String(loadsheetSummary.sect_b_bagwt) },
-        { label: "ZFW/CG",  value: String(loadsheetSummary.zfw_cg) },
-      ] },
-    { key: "pk3",   side: "C", tight: true, pack: [
-        { label: "FOB",     value: String(loadsheetSummary.sect_c_fuel) },
-        { label: "TOT PAX", value: String(loadsheetSummary.ttl_pax) },
-      ] },
-    { key: "status",label: "",           value: loadsheetSummary.takeoff_data_avail ? "TAKEOFF DATA AVAIL" : "NO TAKEOFF DATA AVAIL", side: "C", editable: false, small: true, error: !loadsheetSummary.takeoff_data_avail, tight: true },
-    { key: "return",label: "",           value: "",                                    side: "C", editable: true, returnLine: true },
+    { key: "flt",   label: "FLT NO",   value: String(loadsheetSummary.flt_no),       side: "L", editable: false, tone: "green" },
+    { key: "rls",   label: "RLS NO",   value: String(loadsheetSummary.rls_no),       side: "C", row: 0, editable: false, tone: "green" },
+    { key: "time",  label: "TIME",     value: String(loadsheetSummary.time),         side: "R", editable: false, tone: "green" },
+    { key: "wind",  label: "WIND",     value: String(loadsheetSummary.wind),         side: "L", editable: false, tone: "green" },
+    { key: "oat",   label: "OAT C",    value: String(loadsheetSummary.oat),          side: "C", row: 1, editable: false, tone: "green" },
+    { key: "qnh",   label: "QNH",      value: String(loadsheetSummary.qnh),          side: "R", editable: false, tone: "green" },
+    { key: "seca",  label: "SEC A",    value: String(loadsheetSummary.sect_a_pax),   side: "L", editable: false, tone: "green" },
+    { key: "fcgo",  label: "F BAG/WT", value: String(loadsheetSummary.sect_a_bagwt), side: "C", row: 2, editable: false, tone: "green" },
+    { key: "gtow",  label: "GTOW/CG",  value: String(loadsheetSummary.gtow_cg),      side: "R", editable: false, tone: "green" },
+    { key: "secb",  label: "SEC B",    value: String(loadsheetSummary.sect_b_pax),   side: "L", editable: false, tone: "green" },
+    { key: "acgo",  label: "A BAG/WT", value: String(loadsheetSummary.sect_b_bagwt), side: "C", row: 3, editable: false, tone: "green" },
+    { key: "fob",   label: "FUEL",     value: String(loadsheetSummary.sect_c_fuel),  side: "R", editable: false, tone: "green" },
+    { key: "secc",  label: "SEC C",    value: String(loadsheetSummary.sect_c_pax),   side: "L", editable: false, tone: "green" },
+    { key: "totpax",label: "TTL PAX",  value: String(loadsheetSummary.ttl_pax),      side: "C", row: 4, editable: false, tone: "green" },
+    { key: "zfw",   label: "ZFW/CG",   value: String(loadsheetSummary.zfw_cg),       side: "R", editable: false, tone: "green" },
+    { key: "return",label: "",         value: "",                                    side: "L", editable: true, returnLine: true },
+    { key: "status",label: "",         value: loadsheetSummary.takeoff_data_avail ? "TAKEOFF DATA AVAIL" : "NO TAKEOFF DATA AVAIL", side: "C", row: 5, editable: false, small: true, error: !loadsheetSummary.takeoff_data_avail, tone: "green" },
   ] : [];
 
   const acarsRemarksFields = loadsheetSummary ? [
@@ -609,23 +650,20 @@ export default function CduApp() {
   // above it) — keeps this page from overflowing the fixed-height screen.
   function buildPerfFields(rd) {
     return [
-      { key: "flex",  label: "FLEX",  value: String(rd.flex),  side: "L", editable: false, tight: true },
-      { key: "flap",  label: "FLAP",  value: String(rd.flaps), side: "L", editable: false, tight: true },
-      { key: "stab",  label: "STAB",  value: String(rd.trim_stab), side: "L", editable: false, tight: true },
-      { key: "v1",    label: "V1",    value: String(rd.v1),    side: "R", editable: false, tight: true },
-      { key: "vr",    label: "VR",    value: String(rd.vr),    side: "R", editable: false, tight: true },
-      { key: "v2",    label: "V2",    value: String(rd.v2),    side: "R", editable: false, tight: true },
-      { key: "vfs",   label: String(rd.vfs_label || "VFS"), value: rd.vfs != null ? String(rd.vfs) : "---", side: "R", editable: false, tight: true },
-      { key: "rwy",   label: "RUNWAY / LENGTH", value: `${rd.airport} ${rd.runway}   ${rd.length}FT`, side: "C", editable: false, tight: true },
-      { key: "pk1",   side: "C", tight: true, pack: [
-          { label: "MRTW/LIM", value: String(rd.mrtw) },
-          { label: "MTOW",     value: String(rd.mtow) },
-        ] },
-      { key: "pk2",   side: "C", tight: true, pack: [
-          { label: "GTOW/CG",  value: String(rd.gtow_cg) },
-          { label: "ACCEL",    value: String(rd.acc_alt) },
-        ] },
-      { key: "return",label: "",       value: "",                       side: "C", editable: true, returnLine: true },
+      { key: "flex",  label: "FLEX",     value: String(rd.flex),      side: "L", editable: false, tone: "green" },
+      { key: "rwy",   label: "RUNWAY",   value: `${rd.airport} ${rd.runway}`, side: "C", row: 0, editable: false, tone: "green" },
+      { key: "v1",    label: "V1",       value: String(rd.v1),        side: "R", editable: false, tone: "green" },
+      { key: "flap",  label: "FLAP",     value: String(rd.flaps),     side: "L", editable: false, tone: "green" },
+      { key: "len",   label: "LENGTH",   value: `${rd.length}FT`,     side: "C", row: 1, editable: false, tone: "green" },
+      { key: "vr",    label: "VR",       value: String(rd.vr),        side: "R", editable: false, tone: "green" },
+      { key: "stab",  label: "STAB",     value: String(rd.trim_stab), side: "L", editable: false, tone: "green" },
+      { key: "mrtw",  label: "MRTW/LIM", value: String(rd.mrtw),      side: "C", row: 2, editable: false, tone: "green" },
+      { key: "v2",    label: "V2",       value: String(rd.v2),        side: "R", editable: false, tone: "green" },
+      { key: "mtow",  label: "MTOW",     value: String(rd.mtow),      side: "L", editable: false, tone: "green" },
+      { key: "accel", label: "ACCEL",    value: String(rd.acc_alt),   side: "C", row: 3, editable: false, tone: "green" },
+      { key: "vfs",   label: String(rd.vfs_label || "VFS"), value: rd.vfs != null ? String(rd.vfs) : "---", side: "R", editable: false, tone: "green" },
+      { key: "gtow",  label: "GTOW/CG",  value: String(rd.gtow_cg),   side: "L", editable: false, tone: "green" },
+      { key: "return",label: "",         value: "",                    side: "L", editable: true, returnLine: true },
     ];
   }
 

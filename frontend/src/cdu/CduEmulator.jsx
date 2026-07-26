@@ -239,6 +239,27 @@ export default function CduEmulator({
   const rightFields  = fields.filter(f => f.side === "R");
   const centerFields = fields.filter(f => f.side === "C");
 
+  // The real screen is a 6-row x 3-column grid: an LSK-addressable field on
+  // the left and right of each row, and an optional middle value on the SAME
+  // row (POH p.9-76 shows FLT NO / RLS NO / TIME all on row 1). Previously
+  // every centre field was stacked underneath the L/R block, which made the
+  // middle column look "sunken" and pushed content past the screen. A centre
+  // field now opts into a row via `row: <0-5>`; anything without one still
+  // stacks below (status lines, <RETURN>, TPS PRINT text).
+  const ROW_COUNT = 6;
+  const rowedCenter = centerFields.filter(f => Number.isInteger(f.row));
+  const looseCenter = centerFields.filter(f => !Number.isInteger(f.row));
+  const gridRows = Array.from({ length: ROW_COUNT }, (_, i) => ({
+    L: leftFields[i],
+    C: rowedCenter.find(f => f.row === i),
+    R: rightFields[i],
+  }));
+  const renderCell = (f, side) => f
+    ? <CduLine key={f.key} label={f.label} value={f.value} side={side} editable={f.editable}
+        small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine}
+        returnLabel={f.returnLabel} tight={f.tight} dim={f.dim} tone={f.tone} />
+    : null;
+
   return (
     <div className="cdu-body">
       <style>{CDU_CSS}</style>
@@ -257,25 +278,22 @@ export default function CduEmulator({
           </div>
 
           <div className="cdu-screen-body">
-            <div className="cdu-screen-top">
-              <div className={`cdu-col cdu-col-left ${leftFields.length && leftFields.every(f => f.tight) ? "cdu-col-tight" : ""}`}>
-                {leftFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} dim={f.dim} tone={f.tone} />
+            {gridRows.map((r, i) => (
+              <div className="cdu-row" key={i}>
+                <div className="cdu-cell">{renderCell(r.L, "L")}</div>
+                <div className="cdu-cell">{renderCell(r.C, "C")}</div>
+                <div className="cdu-cell">{renderCell(r.R, "R")}</div>
+              </div>
+            ))}
+            {looseCenter.length > 0 && (
+              <div className="cdu-loose">
+                {looseCenter.map((f, i) => (
+                  f.pack
+                    ? <CduPackLine key={f.key || i} pack={f.pack} tight={f.tight} />
+                    : <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} dim={f.dim} tone={f.tone} />
                 ))}
               </div>
-              <div className={`cdu-col cdu-col-right ${rightFields.length && rightFields.every(f => f.tight) ? "cdu-col-tight" : ""}`}>
-                {rightFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} dim={f.dim} tone={f.tone} />
-                ))}
-              </div>
-            </div>
-            <div className={`cdu-col cdu-col-center ${centerFields.length && centerFields.filter(x => !x.returnLine).every(f => f.tight) ? "cdu-col-tight" : ""}`}>
-              {centerFields.map((f, i) => (
-                f.pack
-                  ? <CduPackLine key={f.key || i} pack={f.pack} tight={f.tight} />
-                  : <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} dim={f.dim} tone={f.tone} />
-              ))}
-            </div>
+            )}
           </div>
 
           <div className={`cdu-scratchpad ${scratchIsError ? "cdu-scratch-error" : ""}`}>
@@ -373,12 +391,15 @@ const CDU_CSS = `
 .cdu-unit {
   position: relative;
   display: inline-block;
-  /* Snaps to whatever screen space is available (up to the original
-     460px design size) without ever stretching — width and height both
-     come from the <img> below, which always scales by its own intrinsic
-     aspect ratio, so the chassis photo can never be distorted. */
-  max-width: min(460px, 92vw);
-  max-height: 90vh;
+  /* Fills the available screen (phone or iPad) without ever stretching:
+     width and height both come from the <img> below, which always scales
+     by its own intrinsic aspect ratio, so the photo can't be distorted.
+     container-type lets the screen text below size in cqw (percent of the
+     unit's own width) so type scales WITH the chassis — otherwise fixed px
+     text looks tiny next to the LSKs on a large display. */
+  container-type: inline-size;
+  max-width: 96vw;
+  max-height: 96vh;
   filter: drop-shadow(0 10px 24px rgba(0,0,0,0.5));
   font-family: "Segoe UI", Helvetica, Arial, sans-serif;
 }
@@ -386,8 +407,8 @@ const CDU_CSS = `
   display: block;
   width: auto;
   height: auto;
-  max-width: min(460px, 92vw);
-  max-height: 90vh;
+  max-width: 96vw;
+  max-height: 96vh;
   user-select: none;
   pointer-events: none;
 }
@@ -398,30 +419,29 @@ const CDU_CSS = `
   display: flex; flex-direction: column; font-family: "Consolas","Menlo","DejaVu Sans Mono",monospace;
   overflow: hidden; }
 .cdu-screen-header { display: flex; align-items: center; justify-content: space-between; color: #eaeaea;
-  font-size: 11px; font-weight: 700; letter-spacing: 1px; padding-bottom: 3%; border-bottom: 1px solid #333; flex-shrink: 0; }
+  font-size: 2.7cqw; font-weight: 700; letter-spacing: 0.2cqw; padding-bottom: 2%; border-bottom: 1px solid #333; flex-shrink: 0; }
 .cdu-page-num { color: #7fd0ff; font-weight: 400; }
-.cdu-screen-body { flex: 1; display: flex; flex-direction: column; padding-top: 3%; overflow: hidden; min-height: 0; }
-.cdu-screen-top { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; flex-shrink: 0; }
-.cdu-col { display: flex; flex-direction: column; gap: 4px; }
-.cdu-col-tight { gap: 1px; }
-.cdu-col-center { padding-top: 6px; }
-.cdu-col-center.cdu-col-tight { padding-top: 2px; }
-.cdu-line-return-wrap { margin-top: 10px; }
+.cdu-screen-body { flex: 1; display: flex; flex-direction: column; padding-top: 1.5%; overflow: hidden; min-height: 0; }
+/* 6 equal rows x 3 columns — the real screen's grid. Equal row heights are
+   what keeps every line pinned to its own LSK no matter what a page holds. */
+.cdu-row { display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center;
+  flex: 1 1 0; min-height: 0; column-gap: 1%; }
+.cdu-cell { min-width: 0; overflow: hidden; }
+.cdu-loose { display: flex; flex-direction: column; align-items: stretch; flex-shrink: 0; }
+.cdu-line-return-wrap { margin-top: 1%; }
 
-.cdu-line { display: flex; flex-direction: column; justify-content: center; min-height: 22px; line-height: 1.1; }
-.cdu-line-tight { min-height: 13px; line-height: 1; }
-.cdu-line-tight .cdu-line-label { font-size: 7.5px; }
-.cdu-line-tight .cdu-line-value { font-size: 10px; }
-.cdu-line-label { color: #7fd0ff; font-size: 8.5px; letter-spacing: 0.4px; }
-.cdu-line-value { color: #f2f2f2; font-size: 12px; font-weight: 700; letter-spacing: 0.5px; min-height: 13px; }
-.cdu-line-value.cdu-line-small { font-size: 10px; font-weight: 400; }
+.cdu-line { display: flex; flex-direction: column; justify-content: center; line-height: 1.05; }
+.cdu-line-tight { line-height: 1; }
+.cdu-line-tight .cdu-line-label { font-size: 1.9cqw; }
+.cdu-line-tight .cdu-line-value { font-size: 2.5cqw; }
+.cdu-line-label { color: #7fd0ff; font-size: 2.1cqw; letter-spacing: 0.08cqw; white-space: nowrap; }
+.cdu-line-value { color: #f2f2f2; font-size: 3.1cqw; font-weight: 700; letter-spacing: 0.1cqw; white-space: nowrap; }
+.cdu-line-value.cdu-line-small { font-size: 2.4cqw; font-weight: 400; }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
-.cdu-line-pack { display: flex; flex-direction: row; min-height: 22px; line-height: 1.1; }
-.cdu-line-pack.cdu-line-tight { min-height: 13px; line-height: 1; }
+.cdu-line-pack { display: flex; flex-direction: row; line-height: 1.05; }
+.cdu-line-pack.cdu-line-tight { line-height: 1; }
 .cdu-pack-item { flex: 1; text-align: center; }
-.cdu-line-pack.cdu-line-tight .cdu-pack-item .cdu-line-label { font-size: 7.5px; }
-.cdu-line-pack.cdu-line-tight .cdu-pack-item .cdu-line-value { font-size: 10px; }
 .cdu-editable { color: #7fff9e; }
 /* Real AeroData ACARS color code (ERJ-170 POH ch.9 sec.16, "Note" on the
    ACARS MAIN MENU page): white = menu selection item, amber = mandatory
@@ -433,8 +453,9 @@ const CDU_CSS = `
 .cdu-dim { color: #5a5a5a; }
 .cdu-line-error { color: #ff5c4d; }
 .cdu-return-line { color: #f2f2f2; }
-.cdu-scratchpad { color: #fff; font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
-  border-top: 1px solid #333; margin-top: 4px; padding-top: 4px; min-height: 14px; flex-shrink: 0; }
+.cdu-scratchpad { color: #fff; font-size: 3.1cqw; font-weight: 700; letter-spacing: 0.1cqw;
+  border-top: 1px solid #333; margin-top: 1%; padding-top: 1%; min-height: 3.4cqw; flex-shrink: 0;
+  white-space: nowrap; overflow: hidden; }
 .cdu-scratch-error { color: #ff5c4d; }
 
 /* LSK hit-targets — transparent, sit right on top of the image's own button
