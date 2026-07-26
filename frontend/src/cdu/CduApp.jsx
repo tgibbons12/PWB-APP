@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import CduEmulator from "./CduEmulator.jsx";
+import CduEmulator, { DELETE_TOKEN } from "./CduEmulator.jsx";
 import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } from "./api.js";
 
 // ─── PWB: STANDALONE MCDU EMULATOR ──────────────────────────────────────────
@@ -194,12 +194,13 @@ export default function CduApp() {
   function handleCond1Commit(key, value) {
     if (key === "return") {
       if (value === null) setPage("IDENT");
-      return;
+      return; // DELETE on the return line: not applicable, no-op
     }
     if (key === "rwy1" || key === "rwy2" || key === "rwy3") {
       const setter = key === "rwy1" ? setRunway1 : key === "rwy2" ? setRunway2 : setRunway3;
       const current = key === "rwy1" ? runway1 : key === "rwy2" ? runway2 : runway3;
       if (value === null) { cycleRunwaySlot(current, setter); return; }
+      if (value === DELETE_TOKEN) { setter(""); return; } // clear this runway slot
       // Validate the base runway id (before any "/INTXN" suffix) against
       // this flight plan's published runways.
       const [base] = value.split("/");
@@ -213,16 +214,18 @@ export default function CduApp() {
         setSurface(surfaceChoices[(idx + 1) % surfaceChoices.length]);
         return;
       }
+      if (value === DELETE_TOKEN) return { error: "NOT ALLOWED" }; // required field
       const mapped = SURFACE_SHORTHAND[value.toUpperCase()];
       if (!mapped || !surfaceChoices.includes(mapped)) return { error: "INVALID ENTRY" };
       setSurface(mapped);
       return;
     }
-    if (key === "wind") { setWind(value); return; }
-    if (key === "gust") { setGust(value); return; }
-    if (key === "relversion") { setRelVersion(value); return; }
-    if (key === "ptow") { setPtow(value); return; }
+    if (key === "wind")  { setWind(value === DELETE_TOKEN ? "" : value); return; }
+    if (key === "gust")  { setGust(value === DELETE_TOKEN ? "" : value); return; }
+    if (key === "relversion") { setRelVersion(value === DELETE_TOKEN ? "" : value); return; }
+    if (key === "ptow")  { setPtow(value === DELETE_TOKEN ? "" : value); return; }
     if (key === "oatqnh") {
+      if (value === DELETE_TOKEN) return { error: "NOT ALLOWED" }; // required field
       const [o, q] = value.split("/");
       if (o === undefined || q === undefined) return { error: "INVALID ENTRY" };
       setOat(o); setQnh(q);
@@ -256,6 +259,9 @@ export default function CduApp() {
   // fields sit in a single left-hand column with nothing on the right,
   // matching the real screen. LLWS ADVISORY is informational only (it
   // doesn't change the takeoff numbers) so it isn't sent to the backend.
+  // DELETE on any of these fixed-choice fields resets it to the default
+  // (same as what a fresh flight-plan load starts with) — real CDU convention
+  // for a field that can't just go blank.
   function handleCond2Commit(key, value) {
     if (key === "flaps") {
       const opts = ["OPTIMUM", "1", "2", "4"];
@@ -264,6 +270,7 @@ export default function CduApp() {
         setFlapSel(opts[(idx + 1) % opts.length]);
         return;
       }
+      if (value === DELETE_TOKEN) { setFlapSel("OPTIMUM"); return; }
       const v = value.toUpperCase();
       if (!opts.includes(v)) return { error: "INVALID ENTRY" };
       setFlapSel(v);
@@ -271,6 +278,7 @@ export default function CduApp() {
     }
     if (key === "antiice") {
       if (value === null) { setAntiIce(a => !a); return; }
+      if (value === DELETE_TOKEN) { setAntiIce(false); return; }
       const v = value.toUpperCase();
       if (v === "ON") setAntiIce(true);
       else if (v === "AUTO") setAntiIce(false);
@@ -279,6 +287,7 @@ export default function CduApp() {
     }
     if (key === "thrust") {
       if (value === null) { setForceMax(f => !f); return; }
+      if (value === DELETE_TOKEN) { setForceMax(false); return; }
       const v = value.toUpperCase();
       if (v === "MAX") setForceMax(true);
       else if (v === "OPTIMUM") setForceMax(false);
@@ -287,6 +296,7 @@ export default function CduApp() {
     }
     if (key === "llws") {
       if (value === null) { setLlwsAdvisory(a => !a); return; }
+      if (value === DELETE_TOKEN) { setLlwsAdvisory(false); return; }
       const v = value.toUpperCase();
       if (v === "YES") setLlwsAdvisory(true);
       else if (v === "NO") setLlwsAdvisory(false);

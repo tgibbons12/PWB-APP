@@ -54,11 +54,19 @@ import ejetChassis from "./ejet.453de855.png";
 //      onFieldCommit returns) in the scratchpad instead of committing,
 //      and the scratchpad is NOT cleared so the pilot can see what they
 //      typed and correct it.
-//   5. CLR deletes one character at a time from the scratchpad; DEL
-//      clears it entirely.
+//   5. CLR deletes one character at a time from the scratchpad. DEL loads
+//      the scratchpad with "*DELETE*" (matches real CDU hardware); pressing
+//      an LSK next with that in the scratchpad clears/resets THAT field
+//      rather than committing literal text — same "type then press an LSK"
+//      pattern as any other entry, just with a delete payload instead of a
+//      typed value.
 //   6. PREV/NEXT are wired to real page navigation via the onPrev/onNext
 //      props (optional — falls back to "NOT AVAIL" if the caller doesn't
 //      supply them, e.g. before a flight plan is loaded).
+
+// Scratchpad content when DEL has been pressed — matches the real CDU's
+// "*DELETE*" prompt, which stays in the scratchpad until an LSK targets it.
+export const DELETE_TOKEN = "*DELETE*";
 
 // Runway entries match the real AeroData ACARS convention: a runway id,
 // optionally with "/INTXN" for an intersection takeoff (e.g. "32L/T10").
@@ -146,12 +154,20 @@ export default function CduEmulator({
 
   const handleClr = useCallback(() => {
     setScratchIsError(false);
-    setScratchpad((s) => s.slice(0, -1));
+    // *DELETE* is inserted as a single unit (not typed char-by-char), so one
+    // CLR press clears it entirely rather than backspacing one character.
+    setScratchpad((s) => (s === DELETE_TOKEN ? "" : s.slice(0, -1)));
   }, []);
 
+  // Real Honeywell/AeroData CDU convention: DEL does NOT erase the
+  // scratchpad. It loads the scratchpad with the "*DELETE*" prompt; the
+  // pilot then presses the LSK next to the field they want cleared, and
+  // THAT commits the delete to that specific line (reverting it to its
+  // default/blank state). This lets one DEL press target any field, same
+  // as typing a value and pressing an LSK.
   const handleDel = useCallback(() => {
     setScratchIsError(false);
-    setScratchpad("");
+    setScratchpad(DELETE_TOKEN);
   }, []);
 
   const handleLsk = useCallback((field) => {
@@ -171,6 +187,18 @@ export default function CduEmulator({
     if (!field.editable) {
       setScratchIsError(true);
       return; // can't overwrite a computed/display-only field
+    }
+
+    if (scratchpad === DELETE_TOKEN) {
+      const result = onFieldCommit?.(field.key, DELETE_TOKEN); // reset this line to default
+      if (result && result.error) {
+        setScratchpad(result.error);
+        setScratchIsError(true);
+        return;
+      }
+      setScratchpad("");
+      setScratchIsError(false);
+      return;
     }
 
     const validated = validateField(field.key, scratchpad);
@@ -300,14 +328,17 @@ export default function CduEmulator({
         {"MNOPQR".split("").map((ch, i) => (
           <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[2]}%`, left: `${ALPHA_COL_X[i]}%` }} onClick={() => appendChar(ch)} />
         ))}
+        {/* Rows 3-4 have only 5 items (not 6 like A-F/G-L/M-R), and on the
+            real image they sit right-shifted within the 6-column grid
+            rather than starting at column 0 — hence the "+ i + 1" offset. */}
         {"STUVW".split("").map((ch, i) => (
-          <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[3]}%`, left: `${ALPHA_COL_X[i]}%` }} onClick={() => appendChar(ch)} />
+          <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[3]}%`, left: `${ALPHA_COL_X[i + 1]}%` }} onClick={() => appendChar(ch)} />
         ))}
         {"XYZ".split("").map((ch, i) => (
-          <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${ALPHA_COL_X[i]}%` }} onClick={() => appendChar(ch)} />
+          <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${ALPHA_COL_X[i + 1]}%` }} onClick={() => appendChar(ch)} />
         ))}
-        <button className="cdu-key cdu-key-wide" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${ALPHA_COL_X[3]}%` }} onClick={handleDel}>DEL</button>
-        <button className="cdu-key cdu-key-wide" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${ALPHA_COL_X[4]}%` }} onClick={handleClr}>CLR</button>
+        <button className="cdu-key cdu-key-wide" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${ALPHA_COL_X[4]}%` }} onClick={handleDel}>DEL</button>
+        <button className="cdu-key cdu-key-wide" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${ALPHA_COL_X[5]}%` }} onClick={handleClr}>CLR</button>
 
         {["1", "2", "3", "+/-"].map((v, i) => (
           <button key={v} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[1]}%`, left: `${NUM_COL_X[i]}%` }} onClick={() => appendChar(v === "+/-" ? "+/-" : v)} />
@@ -327,14 +358,28 @@ export default function CduEmulator({
 }
 
 const CDU_CSS = `
-.cdu-body { display: flex; justify-content: center; padding: 12px; background: transparent; }
+.cdu-body { display: flex; justify-content: center; align-items: center; padding: 12px; background: transparent; }
 .cdu-unit {
   position: relative;
-  width: 460px;
+  display: inline-block;
+  /* Snaps to whatever screen space is available (up to the original
+     460px design size) without ever stretching — width and height both
+     come from the <img> below, which always scales by its own intrinsic
+     aspect ratio, so the chassis photo can never be distorted. */
+  max-width: min(460px, 92vw);
+  max-height: 90vh;
   filter: drop-shadow(0 10px 24px rgba(0,0,0,0.5));
   font-family: "Segoe UI", Helvetica, Arial, sans-serif;
 }
-.cdu-unit-img { display: block; width: 100%; height: auto; user-select: none; pointer-events: none; }
+.cdu-unit-img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(460px, 92vw);
+  max-height: 90vh;
+  user-select: none;
+  pointer-events: none;
+}
 
 /* Screen — positioned over the image's black rect. */
 .cdu-screen { position: absolute; left: 15.5%; top: 6.2%; width: 69%; height: 43.5%;
