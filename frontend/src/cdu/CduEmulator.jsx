@@ -394,10 +394,11 @@ const CDU_CSS = `
   /* Fills the available screen (phone or iPad) without ever stretching:
      width and height both come from the <img> below, which always scales
      by its own intrinsic aspect ratio, so the photo can't be distorted.
-     container-type lets the screen text below size in cqw (percent of the
-     unit's own width) so type scales WITH the chassis — otherwise fixed px
-     text looks tiny next to the LSKs on a large display. */
-  container-type: inline-size;
+     NOTE: do NOT put container-type here — inline-size containment stops
+     this box from shrink-wrapping the image, so it takes the parent's full
+     width and every absolutely-positioned overlay (screen, LSKs, keypad)
+     detaches from the chassis. The container lives on .cdu-screen instead,
+     which has an explicit size and so is safe to contain. */
   max-width: 96vw;
   max-height: 96vh;
   filter: drop-shadow(0 10px 24px rgba(0,0,0,0.5));
@@ -414,12 +415,17 @@ const CDU_CSS = `
 }
 
 /* Screen — positioned over the image's black rect. */
-.cdu-screen { position: absolute; left: 15.5%; top: 6.2%; width: 69%; height: 43.5%;
+/* container-type here (not on .cdu-unit) — this box's size comes from the
+   percentages below, not its contents, so containment is safe. All screen
+   type is sized in cqw = percent of THIS box's width, so it scales with the
+   chassis instead of staying a fixed px size next to huge LSKs on an iPad. */
+.cdu-screen { container-type: inline-size;
+  position: absolute; left: 15.5%; top: 6.2%; width: 69%; height: 43.5%;
   background: #050505; border-radius: 3px; padding: 4% 4%; box-sizing: border-box;
   display: flex; flex-direction: column; font-family: "Consolas","Menlo","DejaVu Sans Mono",monospace;
   overflow: hidden; }
 .cdu-screen-header { display: flex; align-items: center; justify-content: space-between; color: #eaeaea;
-  font-size: 2.7cqw; font-weight: 700; letter-spacing: 0.2cqw; padding-bottom: 2%; border-bottom: 1px solid #333; flex-shrink: 0; }
+  font-size: 3.9cqw; font-weight: 700; letter-spacing: 0.29cqw; padding-bottom: 2%; border-bottom: 1px solid #333; flex-shrink: 0; }
 .cdu-page-num { color: #7fd0ff; font-weight: 400; }
 .cdu-screen-body { flex: 1; display: flex; flex-direction: column; padding-top: 1.5%; overflow: hidden; min-height: 0; }
 /* 6 equal rows x 3 columns — the real screen's grid. Equal row heights are
@@ -432,11 +438,11 @@ const CDU_CSS = `
 
 .cdu-line { display: flex; flex-direction: column; justify-content: center; line-height: 1.05; }
 .cdu-line-tight { line-height: 1; }
-.cdu-line-tight .cdu-line-label { font-size: 1.9cqw; }
-.cdu-line-tight .cdu-line-value { font-size: 2.5cqw; }
-.cdu-line-label { color: #7fd0ff; font-size: 2.1cqw; letter-spacing: 0.08cqw; white-space: nowrap; }
-.cdu-line-value { color: #f2f2f2; font-size: 3.1cqw; font-weight: 700; letter-spacing: 0.1cqw; white-space: nowrap; }
-.cdu-line-value.cdu-line-small { font-size: 2.4cqw; font-weight: 400; }
+.cdu-line-tight .cdu-line-label { font-size: 2.8cqw; }
+.cdu-line-tight .cdu-line-value { font-size: 3.6cqw; }
+.cdu-line-label { color: #7fd0ff; font-size: 3.0cqw; letter-spacing: 0.12cqw; white-space: nowrap; }
+.cdu-line-value { color: #f2f2f2; font-size: 4.5cqw; font-weight: 700; letter-spacing: 0.14cqw; white-space: nowrap; }
+.cdu-line-value.cdu-line-small { font-size: 3.5cqw; font-weight: 400; }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
 .cdu-line-pack { display: flex; flex-direction: row; line-height: 1.05; }
@@ -453,8 +459,8 @@ const CDU_CSS = `
 .cdu-dim { color: #5a5a5a; }
 .cdu-line-error { color: #ff5c4d; }
 .cdu-return-line { color: #f2f2f2; }
-.cdu-scratchpad { color: #fff; font-size: 3.1cqw; font-weight: 700; letter-spacing: 0.1cqw;
-  border-top: 1px solid #333; margin-top: 1%; padding-top: 1%; min-height: 3.4cqw; flex-shrink: 0;
+.cdu-scratchpad { color: #fff; font-size: 4.5cqw; font-weight: 700; letter-spacing: 0.14cqw;
+  border-top: 1px solid #333; margin-top: 1%; padding-top: 1%; min-height: 4.9cqw; flex-shrink: 0;
   white-space: nowrap; overflow: hidden; }
 .cdu-scratch-error { color: #ff5c4d; }
 
