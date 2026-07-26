@@ -410,6 +410,25 @@ def safe_float(value, default=0.0):
     except (ValueError, TypeError):
         return default
 
+def sanitize_for_imessage(text):
+    """Strip characters that break the iMessage/ACARS print pipeline (ported as-is from AERODATA.py)."""
+    replacements = {
+        '’': "'", '‘': "'",
+        '“': '"', '”': '"',
+        '–': '-', '—': '-',
+        '°': 'deg',
+        'é': 'e', 'è': 'e',
+        'à': 'a', 'â': 'a',
+        'ô': 'o',
+        '•': '*',
+        '±': '+/-',
+        '→': '->',
+        '\xa0': ' ',
+    }
+    for orig, repl in replacements.items():
+        text = text.replace(orig, repl)
+    return text.encode('ascii', errors='replace').decode('ascii').replace(b'?'.decode(), '?')
+
 
 # ====================================================================================
 # RUNWAY INDEX — intersection data from runway_index.dat
@@ -757,6 +776,7 @@ def parse_xml_raw(xml_root, date, aircraft_type):
     engine_type = acdata.get('comments', 'UNKNOWN')
 
     # Runways
+    icaocode_early = get_text(aircraft, 'icaocode', aircraft_type)
     valid_runways = []
     for runway in xml_root.findall('.//tlr/takeoff//runway'):
         if is_valid_runway(runway):
@@ -767,6 +787,27 @@ def parse_xml_raw(xml_root, date, aircraft_type):
                 hd_value = float(get_val('headwind_component', '0'))
             except (ValueError, TypeError):
                 hd_value = 0.0
+
+            # v_other / v_other_id: SimBrief XML sometimes omits these — fall
+            # back to SPEEDOTHER.get_speed_other() the same way AERODATA.py does.
+            v_other    = get_val('v_other', None)
+            v_other_id = get_val('v_other_id', None)
+            if not v_other or v_other == '0' or v_other == 'None':
+                try:
+                    speed_result = get_speed_other(icaocode_early, weight=est_tow_xml)
+                    if speed_result and isinstance(speed_result, dict):
+                        v_other_id = speed_result.get('name', 'VFS')
+                        v_other    = str(speed_result.get('speed', 'XXX'))
+                    else:
+                        v_other_id = 'VFS'
+                        v_other    = 'XXX'
+                except (TypeError, ValueError, AttributeError) as e:
+                    print(f"[WARNING] SPEEDOTHER.py failed for {icaocode_early}: {e}")
+                    v_other_id = 'VFS'
+                    v_other    = 'XXX'
+            v_other    = str(v_other)    if v_other    else 'XXX'
+            v_other_id = str(v_other_id) if v_other_id else 'VFS'
+
             valid_runways.append({
                 'id':               get_val('identifier', 'XX'),
                 'slope':            get_val('gradient', '0'),
@@ -774,6 +815,12 @@ def parse_xml_raw(xml_root, date, aircraft_type):
                 'v1':               get_val('speeds_v1', '0'),
                 'vr':               get_val('speeds_vr', '0'),
                 'v2':               get_val('speeds_v2', '0'),
+                'v_other':          v_other,
+                'v_other_id':       v_other_id,
+                'vfs':              v_other,
+                'headwind':         get_val('headwind_component', '0'),
+                'crosswind':        get_val('crosswind_component', '0'),
+                'wind_dir':         get_val('wind_direction', '0'),
                 'thr':              get_val('thrust_setting', 'xxx'),
                 'flex':             get_val('flex_temperature', 'XXX'),
                 'length':           get_val('length', '0'),
@@ -783,6 +830,8 @@ def parse_xml_raw(xml_root, date, aircraft_type):
                 'elevation':        float(get_val('elevation', '0')),
                 'limit_code':       get_val('limit_code', ''),
                 'HD':               hd_value,
+                'magnetic_course':  get_val('magnetic_course', '0'),
+                'internal_code':    get_val('limit_code', 'A'),
                 'distance_reject':  safe_int(get_val('distance_reject', '0')),
             })
 
@@ -820,9 +869,11 @@ def parse_xml_raw(xml_root, date, aircraft_type):
         # identity
         'flight_number': get_text(general, 'flight_number', 'UNKNOWN'),
         'icao_airline': get_text(general, 'icao_airline', ''),
+        'RLS': get_text(general, 'release', 'UNKNOWN'),
         'date': date,
         'aircraft_type': aircraft_type,
         'icaocode':   get_text(aircraft, 'icaocode'),
+        'base_type':  get_text(aircraft, 'base_type', 'XXX'),
         'AC_name':    get_text(aircraft, 'name', 'XXX'),
         'registration': get_text(aircraft, 'reg', 'UNKNOWN'),
         'fin':          get_text(aircraft, 'fin', 'UNKNOWN'),
@@ -915,6 +966,7 @@ def build_weights(xml_data, pax_count, cargo, plan_ramp, cg_percent, zfw_overrid
         'dest_iata':     xml_data['dest_iata'],
         'altn':          xml_data['altn_icao'],
         'AC_name':       xml_data['AC_name'],
+        'base_type':     xml_data.get('base_type', 'XXX'),
         'aircraft_type': xml_data['aircraft_type'],
         'registration':  xml_data['registration'],
         'icaocode':      xml_data['icaocode'],
@@ -945,6 +997,7 @@ def build_weights(xml_data, pax_count, cargo, plan_ramp, cg_percent, zfw_overrid
         'Time Generated': get_utc_time(),
         'Flight Number':  xml_data['flight_number'],
         'Ship Number':    xml_data['fin'],
+        'RLS':            xml_data.get('RLS', 'UNKNOWN'),
         'origin':         xml_data['origin_icao'],
         'origin_iata':    xml_data['origin_iata'],
         'Destination':    xml_data['dest_icao'],
@@ -1885,6 +1938,512 @@ def generate_closeout(loadsheet_data, uplink_data, output_folder, cg_percent, tl
 
     print(f"Closeout data generated: {closeout_file}")
     return closeout_file
+
+
+# ====================================================================================
+# GENERATE COMBINED OUTPUT — AERODATA.py's original single-file ACARS printout
+# (TAKEOFF DATA + loadsheet summary combined) — ported from AERODATA.py, not
+# derived from generate_tps()/generate_closeout() above. This is the format
+# PWB's CDU targets; those two functions are left in place for reference /
+# backward compatibility but are not called by the PWB API route.
+# ====================================================================================
+
+def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ice_on,
+                              output_folder, cg_percent, tlr_tables=None,
+                              tlr_scenario_active=False, force_tlr_condition=None, sc_extra_fuel=0):
+    """
+    Write the single COMBINED takeoff+loadsheet ACARS-style file, exactly as
+    AERODATA.py's generate_combined_output() does. Returns
+    (combined_file_path, runway_results) where runway_results is a list of
+    per-runway dicts — {runway, v1, vr, v2, flex, flaps, thr, acc_alt, tr_alt,
+    eo_alt, trim_stab, mrtw, n1} — computed during the same pass that writes
+    the file, so the CDU can show authoritative values directly as JSON
+    instead of re-parsing the printed text.
+
+    On a fuel-variance rejection, the file contains the ACARS rejection
+    notice (matching the original) and runway_results is [].
+    """
+
+    def safe_val(val, default="---"):
+        try:
+            return str(int(float(val)))
+        except (ValueError, TypeError):
+            return default
+
+    # ── TLR interpolation (applied before writing) ──────────────────────────
+    tow_for_interp     = loadsheet_data.get("TOW", 0) + sc_extra_fuel
+    surface_for_interp = uplink_data.get("surface", "dry").upper()
+    tow_scaled         = tow_for_interp / 100.0
+
+    if tlr_tables and tlr_scenario_active:
+        updated_runways = []
+        for rwy in valid_runways:
+            rwy_id = rwy.get("id", "")
+            tlr_override = get_tlr_speeds_for_runway(
+                tlr_tables, rwy_id, surface_for_interp, tow_scaled,
+                force_condition=force_tlr_condition
+            )
+            if tlr_override:
+                merged = dict(rwy)
+                merged["v1"]         = tlr_override["v1"]
+                merged["vr"]         = tlr_override["vr"]
+                merged["v2"]         = tlr_override["v2"]
+                merged["max_weight"] = tlr_override["max_weight"] / 100.0
+                merged["limit_code"] = tlr_override["limit_code"]
+                merged["flaps"]      = tlr_override["flaps"]
+                merged["flex"]       = tlr_override["flex"]
+                merged["thr"]        = tlr_override["thr"]
+                merged["bleed"]      = tlr_override["bleed"]
+                updated_runways.append(merged)
+                print(f"[TLR] RWY {rwy_id}: V1={tlr_override['v1']} VR={tlr_override['vr']} "
+                      f"V2={tlr_override['v2']} MTOW={tlr_override['max_weight']} "
+                      f"LIMIT={tlr_override['limit_code']}")
+            else:
+                print(f"[TLR] RWY {rwy_id}: no TLR match — keeping SimBrief XML speeds.")
+                updated_runways.append(rwy)
+        valid_runways = updated_runways
+
+    # Create file path
+    base_filename = (
+        f"{loadsheet_data['Flight Number']}_{uplink_data['origin_icao']}"
+        f"_{datetime.now().strftime('%Y%m%d')}_COMBINED.txt"
+    )
+    combined_file = os.path.join(output_folder, base_filename)
+
+    icaocode    = uplink_data.get("icaocode", "XXXX")
+    trim_data   = get_trim_setting(icaocode, cg_percent)
+    cg_display  = f"{cg_percent:.1f}" if cg_percent is not None else ""
+
+    # Fuel variance check — tolerance comes from the PTOW+N offset in TLR tables
+    try:
+        fuel_change = abs(float(loadsheet_data.get('FUEL Change', 0)))
+        _fuel_tol = 2000
+        if tlr_tables:
+            _surface_data = tlr_tables.get('DRY') or tlr_tables.get('WET') or {}
+            _ptow_key = next((k for k in _surface_data if k.startswith('PTOW+')), None)
+            if _ptow_key:
+                try:
+                    _fuel_tol = int(_ptow_key.split('+')[1])
+                except (IndexError, ValueError):
+                    pass
+        _fuel_tol = max(_fuel_tol, 1000)
+        if fuel_change > _fuel_tol:
+            with open(combined_file, 'w') as file:
+                file.write("**** THIS TPS DOES NOT SATISFY THE ****\n")
+                file.write("*** REQUIREMENTS OF A LOAD CLOSEOUT ***\n\n")
+                file.write("*** NOTIFICATION MESSAGE ***\n")
+                file.write("TAKEOFF DATA REJECTED BY FMC, ACTUAL FUEL\n")
+                file.write("ONBOARD DIFFERS FROM PLANNED AND EXCEEDS\n")
+                file.write("TOLERANCES. REQUEST TAKEOFF DATA WHEN\n")
+                file.write("FUELING IS COMPLETE\n")
+                file.write("AUTOMATED FLT OPS MESSAGE\n\n")
+            print(f"[COMBINED] FUEL VARIANCE EXCEEDS {_fuel_tol} LBS - DATA NOT GENERATED")
+            return combined_file, []
+    except (ValueError, TypeError) as e:
+        print(f"[DEBUG] Fuel variance check skipped: {e}")
+
+    rwy = valid_runways[0] if valid_runways else {'id': 'XX', 'length': 'XXXX', 'elevation': 0}
+    airport_elevation = float(rwy.get('elevation', 0))
+    airport_icao      = uplink_data.get('origin_icao', 'XXXX')
+    airport_altitudes = get_airport_specific_altitudes(airport_icao, airport_elevation)
+
+    sta      = uplink_data.get('origin_icao', 'XXXX')
+    temp     = uplink_data.get('temp', 'XX')
+    trim_display = trim_data.get('trim', 'X.X') if trim_data else 'X.X'
+
+    runway_results = []
+
+    with open(combined_file, 'w') as f:
+        # ==========================================
+        # SECTION 1: TAKEOFF DATA
+        # ==========================================
+
+        fn       = str(loadsheet_data['Flight Number'])
+        tail     = str(loadsheet_data['Ship Number'])
+        rls_no   = str(loadsheet_data.get('RLS', 'UNKNOWN'))
+        time_gen = loadsheet_data['Time Generated']
+        wind     = uplink_data['wind']
+        temp     = uplink_data['temp']
+        qnh      = uplink_data['qnh']
+        tow_lbs  = loadsheet_data['TOW']
+        zfw_lbs  = loadsheet_data['ZFW']
+        fob_lbs  = loadsheet_data['FOB']
+        tow_k    = tow_lbs / 1000
+        zfw_k    = zfw_lbs / 1000
+        pax      = loadsheet_data['Passengers']
+        lap      = loadsheet_data['LAP']
+        total_cargo = loadsheet_data['Total Cargo']
+        zfw_cg   = loadsheet_data.get('ZFW CG', cg_percent)
+
+        _W = 24  # fixed right edge — all lines terminate at col 24
+
+        def _rj(left, right, width=_W):
+            """Right-justify: pad between left and right so total = width."""
+            gap = width - len(str(left)) - len(str(right))
+            return str(left) + ' ' * max(1, gap) + str(right)
+
+        # ── Header: FLT / RLS / TIME ──────────────────────────────────────
+        f.write(_rj("FLT      RLS",  "TIME") + "\n")
+        f.write(_rj(f"{fn:<9}{rls_no}", f"{time_gen}Z") + "\n")
+        # ── Wind / OAT / QNH ─────────────────────────────────────────────
+        f.write(_rj("WIND     OAT C", "QNH") + "\n")
+        try:
+            oat_int = int(float(temp))
+        except (ValueError, TypeError):
+            oat_int = 0
+        f.write(_rj(f"{wind:<9}{oat_int}", qnh) + "\n")
+        # ── SECT A/B/C ────────────────────────────────────────────────────
+        fwd_cargo = loadsheet_data['FWD Cargo']
+        aft_cargo = loadsheet_data['AFT Cargo']
+        fwd_pax = max(0, round(pax * 0.25))
+        aft_pax = pax - fwd_pax
+        f.write(_rj("SECT A   F CGO",  "GTOW/CG") + "\n")
+        f.write(_rj(f"{fwd_pax:<9}{fwd_cargo}", f"{tow_k:.1f}/{cg_display}") + "\n")
+        f.write(_rj("SECT B   A CGO",  "ZFW/CG") + "\n")
+        f.write(_rj(f"{aft_pax:<9}{aft_cargo}", f"{zfw_k:.1f}/{zfw_cg:.1f}") + "\n")
+        f.write(_rj("SECT C   FOB",    "TOT PAX") + "\n")
+        f.write(_rj(f"{lap:<9}{fob_lbs}", pax) + "\n")
+        # ── REMARKS block ─────────────────────────────────────────────────
+        remarks = ["REMARKS"]
+        ptow_xml     = loadsheet_data.get('PTOW', tow_lbs)
+        pzfw_xml     = loadsheet_data.get('MAX ZFW', zfw_lbs)
+        ptow_planned = uplink_data.get('ptow', tow_lbs)
+        pzfw_planned = uplink_data.get('pzfw', zfw_lbs)
+        zfw_pct_diff  = abs((zfw_lbs - pzfw_planned) / pzfw_planned * 100) if pzfw_planned else 0
+        gtow_pct_diff = abs((tow_lbs - ptow_planned) / ptow_planned * 100) if ptow_planned else 0
+        if zfw_lbs < pzfw_planned and zfw_pct_diff > 5:
+            remarks.append("CAUTION - ZFW LESS THAN")
+            remarks.append("PZFW BY MORE THAN 5 PCT")
+        if tow_lbs < ptow_planned and gtow_pct_diff > 5:
+            remarks.append("CAUTION - GTOW LESS THAN")
+            remarks.append("PTOW BY MORE THAN 5 PCT")
+        surface_raw = uplink_data.get('surface', 'dry').upper()
+        if surface_raw and surface_raw != 'DRY':
+            remarks.append(f"{surface_raw} RUNWAY")
+        if anti_ice_on:
+            remarks.append("ENGINE AND WING ANTI-ICE")
+            remarks.append("ON")
+        remarks.append("NO LIVE")
+        remarks.append(f"TKT INF:0 * LAP INF:{lap}")
+        for rl in remarks:
+            f.write(rl + "\n")
+        f.write("\n")
+        f.write("\n")
+
+        # ── Takeoff performance block ─────────────────────────────────────
+        base_type       = uplink_data.get('base_type', 'XXXX')
+        third_col_label = "ECS" if base_type in ("E170", "E175", "E190", "E195") else "BLD"
+        efp_text        = (airport_altitudes.get('EFP', '') if airport_altitudes else '').strip()
+        _icaocode  = uplink_data.get('icaocode', '')
+        is_boeing  = _icaocode.startswith('B')
+        is_airbus  = _icaocode.startswith('A')
+        _ERJ_TYPES = {'E135', 'E140', 'E145', 'E45X'}
+        is_erj     = _icaocode.upper().replace('-', '').replace(' ', '') in _ERJ_TYPES
+        ptow_k         = round(loadsheet_data.get('PTOW', 0) / 1000, 1)
+        max_tow_struct = loadsheet_data.get('MAX TOW STRUCT', 0) / 1000
+        trim_str       = trim_data['trim'] if trim_data else '   '
+
+        if trim_data:
+            _trim_val = str(trim_data.get('trim', '')).strip()
+            _trim_dir = str(trim_data.get('direction', '')).strip()
+            trim_stab = f"{_trim_dir} {_trim_val}".strip() if _trim_dir else _trim_val
+        else:
+            trim_stab = '---'
+
+        def _get_n1(rwy_data, uplink, loadsheet):
+            try:
+                tow_lbs_n1 = loadsheet.get('TOW', 0)
+                temp_n1    = uplink.get('temp', '0')
+                icao_n1    = uplink.get('icaocode', '')
+                flex_n1    = rwy_data.get('flex', '')
+                result_n1  = get_reduced_thrust_n1(icao_n1, tow_lbs_n1, temp_n1, flex_n1)
+                if result_n1 and str(result_n1).replace('.', '').isdigit():
+                    return f"{float(result_n1):.1f}"
+            except Exception:
+                pass
+            return None
+
+        def _ensure_msl(raw, elev, min_agl=800):
+            v = int(raw)
+            return v if v > int(elev) + min_agl else int(elev) + v
+
+        for rwy_idx, rwy in enumerate(valid_runways):
+            rwy_elevation = float(rwy.get('elevation', airport_elevation))
+            rwy_fallback  = int(rwy_elevation + 1000)
+            if airport_altitudes:
+                _acc_raw = airport_altitudes.get('acc') or airport_altitudes.get('accel') or rwy_fallback
+                _eo_raw  = airport_altitudes.get('eo_acc') or airport_altitudes.get('eo') or rwy_fallback
+                _tr_raw  = airport_altitudes.get('tr') or rwy_fallback
+                rwy['acc_alt'] = str(_ensure_msl(_acc_raw, rwy_elevation))
+                rwy['eo_acc']  = str(_ensure_msl(_eo_raw,  rwy_elevation))
+                rwy['tr']      = str(_ensure_msl(_tr_raw,  rwy_elevation))
+            else:
+                rwy.setdefault('acc_alt', str(rwy_fallback))
+                rwy.setdefault('eo_acc',  str(rwy_fallback))
+                rwy.setdefault('tr',      str(rwy_fallback))
+
+            rwy_len = int(float(rwy.get("length", 0)))
+            mc      = int(float(rwy.get("magnetic_course", 0)))
+            slope   = float(rwy.get("slope", "0") or "0")
+            print(f"[DEBUG] RWY {rwy_idx+1}: STA={sta}, ID={rwy['id']}, Len={rwy_len}, MC={mc}")
+
+            if rwy_idx > 0:
+                f.write("\n\n")
+
+            # Common values
+            v1_val       = int(float(rwy['v1']))
+            vr_val       = int(float(rwy['vr']))
+            v2_val       = safe_val(rwy.get('v2', 0))
+            mrtw_k       = round(rwy['max_weight'], 1)
+            mtow_str     = f"{max_tow_struct:.1f}"
+            gtow_cg_str  = f"{ptow_k:.1f}/{cg_percent:.1f}"
+            mrtw_lim_str = f"{mrtw_k:.1f}/{rwy['limit_code']:1s}"
+            n1_str       = _get_n1(rwy, uplink_data, loadsheet_data)
+            flex_str     = str(rwy['flex'])
+            flap_str     = str(rwy['flaps'])
+            bleed_str    = rwy.get('bleed', 'ON')
+            thr_str      = rwy.get('thr', '')
+            acc_alt      = rwy.get('acc_alt', 'XXXX')
+            tr_alt       = rwy.get('tr', acc_alt)
+            eo_alt       = rwy.get('eo_acc', acc_alt)
+
+            # Structured result for the CDU — collected here so the frontend
+            # gets authoritative JSON fields instead of re-parsing the text.
+            runway_results.append({
+                "runway": rwy.get("id", ""),
+                "v1": v1_val,
+                "vr": vr_val,
+                "v2": v2_val,
+                "flex": flex_str,
+                "flaps": flap_str,
+                "thr": thr_str,
+                "acc_alt": acc_alt,
+                "tr_alt": tr_alt,
+                "eo_alt": eo_alt,
+                "trim_stab": trim_stab,
+                "mrtw": mrtw_lim_str,
+                "n1": n1_str,
+            })
+
+            if base_type == 'DH8D':
+                v_label   = 'VCL'
+                v_val_raw = rwy.get('v_other') or rwy.get('vfs') or 'XXX'
+            else:
+                v_label   = rwy.get('v_other_id', 'VFS')
+                v_val_raw = rwy.get('v_other') or rwy.get('vfs') or 'XXX'
+            try:
+                v_val = int(float(v_val_raw)) if v_val_raw not in ['XXX', 'None', None, ''] else None
+            except (TypeError, ValueError):
+                v_val = None
+
+            fra_code   = airport_altitudes.get('fra', '') if airport_altitudes else ''
+            C1 = 8
+            _hdr_width = 18
+
+            # Runway header + intersection
+            full_tora        = int(float(rwy.get('_full_tora_ft', rwy_len)))
+            _intxn_txwy_list = rwy.get('_intxn_taxiways', [])
+            _is_intxn        = (full_tora > rwy_len) and bool(_intxn_txwy_list)
+
+            if is_airbus:
+                _ab_txwy   = f"/{_intxn_txwy_list[0]}" if _is_intxn else ""
+                _ab_rwy_id = f"{rwy['id']}{_ab_txwy}"
+                _rt_label  = "SPECIAL" if efp_text else f"DT H{mc:03d}"
+                f.write(f"{sta} {_ab_rwy_id:<{18 - len(sta) - 1 - len(_rt_label)}}{_rt_label}\n")
+            else:
+                _rwy_hdr_icao = airport_icao  # 4-char ICAO; rwy_len starts at col 19
+                _rwy_id_pad   = max(1, 18 - len(_rwy_hdr_icao))
+                f.write(f"{_rwy_hdr_icao} {rwy['id']:<{_rwy_id_pad}}{rwy_len}\n")
+                if _is_intxn:
+                    _txwy_str = '/'.join(_intxn_txwy_list)
+                    f.write(f"INTXN TXWY {_txwy_str}\n" if _txwy_str else "INTXN\n")
+
+            # ── AIRBUS FORMAT ─────────────────────────────────────────────
+            if is_airbus:
+                _is_toga   = flex_str.strip() in ('--', '', 'TOGA')
+                _thr_label = "TOGA" if _is_toga else "FLEX"
+                f.write(f"{_thr_label} - BLEEDS ON\n")
+
+                trim_val = trim_stab.split()[-1] if trim_stab and trim_stab != '---' else '0.0'
+                try:
+                    flap_int     = int(flap_str)
+                    flap_display = f"*{flap_int}*" if flap_int not in (1, 5) else str(flap_int)
+                except (ValueError, TypeError):
+                    flap_display = f"*{flap_str}*"
+                flap_trim = f"{flap_display}/UP{trim_val}"
+                flex_disp = f"FLEX {flex_str}"
+
+                _hw = int(float(rwy.get('headwind', 0) or 0))
+                _xw = int(float(rwy.get('crosswind', 0) or 0))
+                try:
+                    _wdir    = float(uplink_data.get('wind_dir', 0) or 0)
+                    _mc      = float(rwy.get('magnetic_course', 0) or 0)
+                    _rel     = (_wdir - _mc) % 360
+                    _xw_side = 'L' if _rel > 180 else 'R'
+                except (ValueError, TypeError):
+                    _xw_side = 'R'
+                if _hw != 0 or _xw != 0:
+                    _hw_label   = 'H' if _hw >= 0 else 'T'
+                    v_other_col = f"{_hw_label}{abs(_hw):02d} {_xw_side}{_xw:02d}"
+                else:
+                    v_other_col = ""
+
+                shift_dist = full_tora - rwy_len if _is_intxn else None
+                _W = 24  # fixed total width
+
+                def _rj_line(val, right):
+                    v   = str(val)
+                    gap = max(1, _W - len(v) - len(right))
+                    return v + ' ' * gap + right
+
+                _v1_right = f"TO SHIFT [{shift_dist:>4}]" if _is_intxn else "TO SHIFT [    ]"
+                f.write("V1\n")
+                f.write(_rj_line(v1_val, _v1_right) + "\n")
+                _vr_right = f"FL/THS {flap_trim}"
+                f.write("VR\n")
+                f.write(_rj_line(vr_val, _vr_right) + "\n")
+                _v2_right = f"{v_other_col}  {flex_disp}" if v_other_col else flex_disp
+                f.write("V2\n")
+                f.write(_rj_line(v2_val, _v2_right) + "\n")
+                f.write(f"\nTR {tr_alt} ACC {tr_alt} EO {tr_alt}\n")
+
+            # ── BOEING FORMAT ─────────────────────────────────────────────
+            elif is_boeing:
+                _B2 = 10  # Boeing middle col
+                if efp_text:
+                    fra_tag = f"FRA {fra_code}" if fra_code else ''
+                    dt_line = f"{'SPECIAL':<{C1 + _B2 - len(fra_tag)}}{fra_tag}"
+                    f.write(dt_line + "\n")
+                else:
+                    _dt_lt = 'LT' if slope >= 0 else 'DT'
+                    f.write(f"{_dt_lt} H{mc:03d}  OAT{int(float(temp)):>4}   {slope: .2f}\n")
+
+                to_label = thr_str.replace('D-TO', 'TO').strip() or 'TO'
+                f.write(f" {to_label} - BLD ON\n")
+                sel_oat = f"{flex_str}/{int(float(temp))}"
+                f.write(f"{'FLAPS':<{C1}}{'MRTW/LIM':<{_B2}}V1 {v1_val}\n")
+                f.write(f"  {flap_str:<{C1-2}}{mrtw_lim_str:<{_B2}}VR {vr_val}\n")
+                f.write(f"{'STAB':<{C1}}{'MTOW':<{_B2}}V2 {v2_val}\n")
+                if n1_str:
+                    f.write(f"{trim_stab:<{C1}}{mtow_str:<{_B2}}\n")
+                    f.write(f"{'SEL/OAT':<{C1}}{'PTOW/CG':<{_B2}}N1\n")
+                    f.write(f"{sel_oat:<{C1}}{gtow_cg_str:<{_B2}}{n1_str}\n")
+                else:
+                    f.write(f"{trim_stab:<{C1}}{mtow_str:<{_B2}}\n")
+                    f.write(f"{'SEL/OAT':<{C1}}{'PTOW/CG':<{_B2}}\n")
+                    f.write(f"{sel_oat:<{C1}}{gtow_cg_str:<{_B2}}\n")
+                f.write("\n")
+                f.write("\n")
+
+            # ── ERJ FORMAT ───────────────────────────────────────────────
+            elif is_erj:
+                if efp_text:
+                    fra_tag = f"FRA {fra_code}" if fra_code else ''
+                    dt_line = f"{'SPECIAL':<{_hdr_width - len(fra_tag)}}{fra_tag}"
+                    f.write(dt_line + "\n")
+                else:
+                    _dt_lt = 'LT' if slope >= 0 else 'DT'
+                    f.write(f"{_dt_lt} H{mc:03d}  OAT{int(float(temp)):>4}   {slope: .2f}\n")
+
+                _ERJ_THR_MAP = {
+                    'TO': 'TO1', 'ATO': 'TO1', 'ALT TO-1': 'ATO',
+                    'ALT TO1': 'ATO', 'ALT TO': 'ATO',
+                    'TO-1': 'TO1', 'TO1': 'TO1', 'TO-2': 'TO2', 'TO2': 'TO2',
+                }
+                thr_erj = _ERJ_THR_MAP.get(thr_str.upper().strip(), thr_str)
+                f.write(f" {thr_erj}\n")
+
+                _ERJ_W = 24  # fixed total width
+
+                def _erj_rj(left, right, width=_ERJ_W):
+                    gap = width - len(str(left)) - len(str(right))
+                    return str(left) + ' ' * max(1, gap) + str(right)
+
+                f.write(_erj_rj("FLEX    MRTW/LIM", f"V1 {v1_val}") + "\n")
+                f.write(_erj_rj(f"{flex_str:<8}{mrtw_lim_str}", f"VR {vr_val}") + "\n")
+
+                vfs_val = rwy.get('vfs') or rwy.get('v_other')
+                try:
+                    vfs_int = int(float(vfs_val)) if vfs_val not in (None, '', 'XXX', 'None') else None
+                except (TypeError, ValueError):
+                    vfs_int = None
+                f.write(_erj_rj("FLAP      MTOW", f"V2 {v2_val}") + "\n")
+                if vfs_int is not None:
+                    f.write(_erj_rj(f"{flap_str:<10}{mtow_str}", f"VFS {vfs_int}") + "\n")
+                else:
+                    f.write(f"{flap_str:<10}{mtow_str}\n")
+
+                f.write(_erj_rj("STAB    GTOW/CG", "ACCEL") + "\n")
+                f.write(_erj_rj(f"{trim_stab:<8}{gtow_cg_str}", acc_alt) + "\n")
+
+                f.write("\n")
+
+            # ── FALLBACK FORMAT ───────────────────────────────────────────
+            else:
+                if efp_text:
+                    fra_tag = f"FRA {fra_code}" if fra_code else ''
+                    dt_line = f"{'SPECIAL':<{_hdr_width - len(fra_tag)}}{fra_tag}"
+                    f.write(dt_line + "\n")
+                else:
+                    _dt_lt = 'LT' if slope >= 0 else 'DT'
+                    f.write(f"{_dt_lt} H{mc:03d}  OAT{int(float(temp)):>4}   {slope: .2f}\n")
+
+                f.write(f" FLEX - {thr_str:<5} - {third_col_label:<3} {bleed_str:<4}\n")
+
+                f.write(f"{'FLEX':<8}{'MRTW/LIM':<10}V1 {v1_val}\n")
+                f.write(f"{flex_str:<8}{mrtw_lim_str:<10}VR {vr_val}\n")
+
+                f.write(f"{'FLAP':<10}{'MTOW':<8}V2 {v2_val}\n")
+                if v_val is not None:
+                    f.write(f"{flap_str:<10}{mtow_str}   {v_label} {v_val}\n")
+                else:
+                    f.write(f"{flap_str:<10}{mtow_str:<8}\n")
+
+                f.write(f"{'STAB':<8}{'GTOW/CG':<11}ACCEL\n")
+                f.write(f"{trim_stab:<8}{gtow_cg_str}   {acc_alt}\n")
+
+                f.write("\n")
+
+        # ── EFP block — written once, after all runways, regardless of format ──
+        if efp_text and valid_runways:
+            last_rwy = valid_runways[-1]
+
+            if is_airbus:
+                _special_tag = "SPECIAL"
+                _id_pad2     = _hdr_width - len(sta) - 1 - len(_special_tag)
+                _efp_hdr     = f"{sta} {last_rwy['id']:<{_id_pad2}}{_special_tag}"
+                f.write("\n")
+                f.write(_efp_hdr + "\n")
+                for _ln in textwrap.fill(efp_text, width=_hdr_width).splitlines():
+                    f.write(_ln + "\n")
+                f.write("\n")
+
+            elif is_boeing:
+                _B2 = 10
+                _special_tag = "SPECIAL"
+                _efp_hdr = f"{sta} {last_rwy['id']:<{C1 + _B2 - len(sta) - 1 - len(_special_tag)}}{_special_tag}"
+                f.write(_efp_hdr + "\n")
+                for _ln in textwrap.fill(efp_text, width=C1 + _B2).splitlines():
+                    f.write(_ln + "\n")
+                f.write("\n")
+
+            else:
+                for _ln in textwrap.fill(efp_text, width=_hdr_width).splitlines():
+                    f.write(f" {_ln}\n")
+                f.write("\n")
+
+    print(f"Combined data generated: {combined_file}")
+
+    try:
+        with open(combined_file, 'r', encoding='utf-8', errors='replace') as f:
+            raw = f.read()
+        clean = sanitize_for_imessage(raw)
+        with open(combined_file, 'w', encoding='ascii', errors='replace') as f:
+            f.write(clean)
+    except Exception as e:
+        print(f"[WARNING] iMessage sanitize step failed: {e}")
+
+    return combined_file, runway_results
 
 
 # ====================================================================================

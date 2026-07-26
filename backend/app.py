@@ -513,17 +513,24 @@ def generate():
 
     try:
         if mode in ("tps", "all"):
-            tps_path = core.generate_tps(
+            # PWB uses AERODATA.py's original combined ACARS-style output
+            # (generate_combined_output), not the TPS app's split
+            # generate_tps()/generate_closeout(). runway_results gives the
+            # CDU authoritative V1/VR/V2/FLEX/FLAPS/THR/ACC ALT/TR ALT/
+            # TRIM/MRTW as JSON, computed in the same pass that writes the
+            # file, so the frontend never has to parse the printed text.
+            tps_path, runway_results = core.generate_combined_output(
                 loadsheet_data, uplink_data, selected_runways,
                 anti_ice_on, OUTPUT_FOLDER, cg_percent, tlr_tables,
                 tlr_scenario_active=tlr_scenario_active,
                 force_tlr_condition=force_condition,
-                revision_number=revision_number,
+                sc_extra_fuel=sc_extra_fuel,
             )
             response["tps"] = {
                 "content": _read_generated_file(tps_path),
                 "filename": os.path.basename(tps_path),
                 "atow": atow_lbs,
+                "runway_results": runway_results,
             }
 
         if mode in ("closeout", "all"):

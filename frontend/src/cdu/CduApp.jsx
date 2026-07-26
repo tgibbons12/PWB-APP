@@ -9,12 +9,20 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 // separate deploy, no shared runtime code (App.jsx / Root.jsx from the
 // original TPS-derived copy are unused leftovers here and can be deleted).
 //
+// The backend generates AERODATA.py's original single-file COMBINED output
+// (generate_combined_output — ACARS-style TAKEOFF DATA + loadsheet summary
+// in one printout), not the later TPS-app's split generate_tps()/
+// generate_closeout(). See backend/takeoff_perf_core.py.
+//
 // Page flow (PREV/NEXT cycle through these once a flight plan is loaded):
-//   IDENT       — enter a SimBrief username, fetch + parse the OFP
-//   PERF TAKEOFF 1/2 — runway, intersection, TLR scenario, anti-ice, conditions
-//   PERF TAKEOFF 2/2 — V1/VR/VR/FLEX/FLAPS overrides, EXEC -> /api/generate
-//   TPS PRINT   — the generated takeoff data, paginated like a real CDU
-//                 TEXT/REPORTS page, with a PRINT (download) key
+//   IDENT             — enter a SimBrief username, fetch + parse the OFP
+//   PERF TAKEOFF 1/2   — runway, intersection, TLR scenario, anti-ice, conditions
+//   PERF TAKEOFF 2/2   — V1/VR/V2/FLEX/FLAPS overrides, EXEC -> /api/generate
+//   PERF RESULT        — authoritative V1/VR/V2/FLAPS/FLEX/THR/ACC ALT/TR ALT/
+//                         TRIM/MRTW from the backend's runway_results (JSON,
+//                         not parsed out of the printed text)
+//   TPS PRINT           — the full generated ACARS text, paginated like a real
+//                         CDU TEXT/REPORTS page, with a PRINT (download) key
 //
 // Known simplifications vs. a full ops UI:
 //   - No raw-XML paste fallback — SimBrief username only. Typing a full XML
@@ -24,9 +32,8 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 //     keypad-driven commit model well.
 //   - V1/VR/V2/FLEX/FLAPS shown on PERF TAKEOFF 1/2 are the SimBrief XML
 //     values (or intersection-substituted ones) — TLR-scenario-interpolated
-//     numbers only exist after EXEC ("nothing authoritative to show until
-//     after Generate completes"). The TPS PRINT page shows the authoritative
-//     result.
+//     numbers only exist after EXEC. The PERF RESULT and TPS PRINT pages
+//     show the authoritative result.
 
 const SCENARIO_DEFS = [
   { key: "DRY_PTOW",      surface: "DRY", cond: "PTOW",      label: "DRY PTOW"  },
@@ -52,7 +59,7 @@ function availableScenarios(xmlData) {
 const LINES_PER_PRINT_PAGE = 11;
 
 export default function CduApp() {
-  const [page, setPage] = useState("IDENT"); // IDENT | PERF1 | PERF2 | PRINT
+  const [page, setPage] = useState("IDENT"); // IDENT | PERF1 | PERF2 | RESULT | PRINT
 
   const [xmlData, setXmlData] = useState(null);
   const [simbriefUsername, setSimbriefUsername] = useState(
@@ -77,7 +84,7 @@ export default function CduApp() {
   const [perfStatus, setPerfStatus] = useState("");
   const [perfStatusErr, setPerfStatusErr] = useState(false);
 
-  const [tpsResult, setTpsResult] = useState(null); // { content, filename, atow }
+  const [tpsResult, setTpsResult] = useState(null); // { content, filename, atow, runway_results }
   const [printPageIndex, setPrintPageIndex] = useState(0);
 
   // ── Data helpers ──────────────────────────────────────────────────────────
@@ -85,6 +92,10 @@ export default function CduApp() {
   const intxnOptions = (xmlData?.intersections?.[rwyData?.id]) ?? [{ id: "FULL", label: "FULL" }];
   const scenarioChoices = availableScenarios(xmlData);
   const conditionsEdited = !!xmlData && (oat !== xmlData.temp || qnh !== xmlData.qnh || wind !== xmlData.wind);
+  // Authoritative post-EXEC result for the selected runway — matches the
+  // {v1,vr,v2,flex,flaps,thr,acc_alt,tr_alt,trim_stab,mrtw} shape computed
+  // server-side by generate_combined_output().
+  const resultData = tpsResult?.runway_results?.[0] ?? null;
 
   function getSpeed(k) {
     return speedOverrides[k] ?? rwyData?.[k] ?? "";
@@ -144,6 +155,10 @@ export default function CduApp() {
 
   // ── PERF TAKEOFF 1/2 — runway / intersection / scenario / conditions ──────
   function handlePerf1Commit(key, value) {
+    if (key === "return") {
+      if (value === null) setPage("IDENT");
+      return;
+    }
     if (key === "runway") {
       const runways = xmlData.valid_runways;
       if (value === null) {
@@ -202,6 +217,7 @@ export default function CduApp() {
     { key: "qnh",     label: "QNH",      value: String(qnh),                             side: "R", editable: true },
     { key: "wind",    label: "WIND",     value: String(wind),                            side: "R", editable: true },
     { key: "status",  label: "",         value: perfStatus,                              side: "C", editable: false, small: true, error: perfStatusErr },
+    { key: "return",  label: "",         value: "",                                      side: "C", editable: true, returnLine: true },
   ] : [];
 
   // ── PERF TAKEOFF 2/2 — speeds + EXEC ──────────────────────────────────────
@@ -262,7 +278,7 @@ export default function CduApp() {
       setPrintPageIndex(0);
       setPerfStatus(`GENERATED — ${result.tps.filename}`);
       setPerfStatusErr(false);
-      setPage("PRINT");
+      setPage("RESULT");
     } catch (e) {
       setPerfStatus(e instanceof ApiError ? e.message.toUpperCase() : "GENERATION FAILED");
       setPerfStatusErr(true);
@@ -270,6 +286,27 @@ export default function CduApp() {
       setGenerating(false);
     }
   }
+
+  // ── PERF RESULT — authoritative computed performance (post-EXEC) ─────────
+  // Field layout matches the original CDU mock exactly: V1/VR/V2/FLAPS left,
+  // FLEX/THR/ACC ALT/TR ALT right, RUNWAY + TRIM/MRTW center.
+  function handleResultCommit(key, value) {
+    if (key === "return" && value === null) setPage("PERF2");
+  }
+
+  const resultFields = resultData ? [
+    { key: "v1",     label: "V1",       value: String(resultData.v1),    side: "L", editable: false },
+    { key: "vr",     label: "VR",       value: String(resultData.vr),    side: "L", editable: false },
+    { key: "v2",     label: "V2",       value: String(resultData.v2),    side: "L", editable: false },
+    { key: "flaps",  label: "FLAPS",    value: String(resultData.flaps), side: "L", editable: false },
+    { key: "flex",   label: "FLEX TEMP",value: String(resultData.flex),  side: "R", editable: false },
+    { key: "thr",    label: "THRUST",   value: String(resultData.thr),   side: "R", editable: false },
+    { key: "accalt", label: "ACC ALT",  value: String(resultData.acc_alt), side: "R", editable: false },
+    { key: "tralt",  label: "TR ALT",   value: String(resultData.tr_alt),  side: "R", editable: false },
+    { key: "rwy",    label: "RUNWAY",   value: resultData.runway,        side: "C", editable: false },
+    { key: "trim",   label: "TRIM / MRTW", value: `${resultData.trim_stab}   ${resultData.mrtw}`, side: "C", editable: false },
+    { key: "return", label: "",         value: "",                       side: "C", editable: true, returnLine: true },
+  ] : [];
 
   // ── TPS PRINT — paginated read-only text ──────────────────────────────────
   const printLines = tpsResult ? tpsResult.content.replace(/\r/g, "").split("\n") : [];
@@ -284,7 +321,7 @@ export default function CduApp() {
 
   function handlePrintPrev() {
     if (printPageIndex > 0) setPrintPageIndex(i => i - 1);
-    else setPage("PERF2");
+    else setPage("RESULT");
   }
   function handlePrintNext() {
     if (printPageIndex < totalPrintPages - 1) setPrintPageIndex(i => i + 1);
@@ -314,7 +351,7 @@ export default function CduApp() {
       onPrev: () => setPage("IDENT"),
       onNext: () => setPage("PERF2"),
       onPerf: () => setPage("PERF1"),
-      onFpl: tpsResult ? () => setPage("PRINT") : undefined,
+      onFpl: tpsResult ? () => setPage("RESULT") : undefined,
     };
   } else if (page === "PERF2") {
     cduProps = {
@@ -324,9 +361,20 @@ export default function CduApp() {
       execAvailable: !!xmlData && !!rwyData && !generating,
       onExec: handleExec,
       onPrev: () => setPage("PERF1"),
-      onNext: tpsResult ? () => setPage("PRINT") : undefined,
+      onNext: tpsResult ? () => setPage("RESULT") : undefined,
       onPerf: () => setPage("PERF1"),
-      onFpl: tpsResult ? () => setPage("PRINT") : undefined,
+      onFpl: tpsResult ? () => setPage("RESULT") : undefined,
+    };
+  } else if (page === "RESULT") {
+    cduProps = {
+      title: "PERF TAKEOFF", pageNum: "RESULT",
+      fields: resultFields,
+      onFieldCommit: handleResultCommit,
+      execAvailable: false,
+      onPrev: () => setPage("PERF2"),
+      onNext: () => setPage("PRINT"),
+      onPerf: () => setPage("PERF1"),
+      onFpl: handlePrintDownload,
     };
   } else { // PRINT
     cduProps = {

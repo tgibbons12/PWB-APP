@@ -7,6 +7,15 @@ import { useState, useCallback } from "react";
 // caller (see CduApp.jsx), so this same component is reused for every CDU
 // page (IDENT / PERF TAKEOFF 1-2 / TPS PRINT).
 //
+// Function key row and screen conventions match the real Honeywell CDU used
+// on E170/175/190/195 (reference: "ACARS TO CONDITIONS 1/2, 2/2" pages):
+//   PERF NAV PREV FPL PROG RTE CB
+//   MENU DLK NEXT EXEC TRS RADIO
+// and on-screen: a down-arrow (↓) prefixes any field with a fixed set of
+// pilot-selectable options, unset free-entry fields show as a dashed
+// placeholder ("----"), and a sub-page can offer a <RETURN> line to go back
+// up a menu level.
+//
 // Real CDU interaction pattern this replicates:
 //   1. Typing on the keypad appends characters to the SCRATCHPAD (bottom
 //      line of the screen) — nothing on the page changes yet.
@@ -20,6 +29,8 @@ import { useState, useCallback } from "react";
 //          small fixed set of choices — RUNWAY, INTERSECTION, SCENARIO,
 //          ANTI-ICE — so the pilot isn't forced to type an exact string
 //          on every change; it is NOT how real CDU hardware behaves).
+//        - a field marked `returnLine: true` (a "<RETURN>" line) navigates
+//          back, same mechanism as cycling — see onFieldCommit's null arg.
 //        - otherwise the LSK is a no-op (matches real CDU: empty
 //          scratchpad + LSK = page navigation, not applicable here).
 //   4. Invalid entries show "INVALID ENTRY" (or whatever message
@@ -52,12 +63,17 @@ function validateField(fieldKey, raw) {
 
 // One line-pair: a label line (small, dim) and a data line (large, bright).
 // side: "L" | "R" | "C" (center, no LSK)
-function CduLine({ label, value, side, editable, small, error }) {
+function CduLine({ label, value, side, editable, small, error, cyclable, returnLine }) {
+  const displayValue = returnLine
+    ? "<RETURN>"
+    : value
+      ? `${cyclable && editable ? "↓" : ""}${value}`
+      : (editable ? "----" : " ");
   return (
     <div className={`cdu-line cdu-line-${side}`}>
       {label && <div className="cdu-line-label">{label}</div>}
-      <div className={`cdu-line-value ${editable ? "cdu-editable" : ""} ${small ? "cdu-line-small" : ""} ${error ? "cdu-line-error" : ""}`}>
-        {value || (editable ? " [  ] " : " ")}
+      <div className={`cdu-line-value ${editable ? "cdu-editable" : ""} ${small ? "cdu-line-small" : ""} ${error ? "cdu-line-error" : ""} ${returnLine ? "cdu-return-line" : ""}`}>
+        {displayValue}
       </div>
     </div>
   );
@@ -66,8 +82,8 @@ function CduLine({ label, value, side, editable, small, error }) {
 export default function CduEmulator({
   title = "PERF TAKEOFF",
   pageNum = "1/1",
-  fields,          // array of { key, label, value, side: 'L'|'R'|'C', editable, cyclable, small }
-  onFieldCommit,   // (fieldKey, value|null) => void|{error}. value is scratchpad text, or null for a "cycle" (empty-scratchpad LSK press on a cyclable field).
+  fields,          // array of { key, label, value, side: 'L'|'R'|'C', editable, cyclable, small, returnLine }
+  onFieldCommit,   // (fieldKey, value|null) => void|{error}. value is scratchpad text, or null for a "cycle" (empty-scratchpad LSK press on a cyclable/returnLine field).
   execAvailable = false,
   onExec,
   onPrev,          // optional: PREV function key
@@ -97,14 +113,14 @@ export default function CduEmulator({
     if (!field) return; // clicked an LSK with nothing bound on that line
 
     if (!scratchpad) {
-      if (field.editable && field.cyclable) {
-        const result = onFieldCommit?.(field.key, null); // null = "cycle to next option"
+      if (field.editable && (field.cyclable || field.returnLine)) {
+        const result = onFieldCommit?.(field.key, null); // null = "cycle to next option" / "return"
         if (result && result.error) {
           setScratchpad(result.error);
           setScratchIsError(true);
         }
       }
-      return; // empty scratchpad + LSK on a non-cyclable field = no-op
+      return; // empty scratchpad + LSK on a plain field = no-op
     }
 
     if (!field.editable) {
@@ -162,23 +178,23 @@ export default function CduEmulator({
             <div className="cdu-screen-body">
               <div className="cdu-col cdu-col-left">
                 {leftFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} />
+                  <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} />
                 ))}
               </div>
               <div className="cdu-col cdu-col-center">
                 {centerFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} />
+                  <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} />
                 ))}
               </div>
               <div className="cdu-col cdu-col-right">
                 {rightFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} />
+                  <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} />
                 ))}
               </div>
             </div>
 
             <div className={`cdu-scratchpad ${scratchIsError ? "cdu-scratch-error" : ""}`}>
-              {scratchpad || " "}
+              {scratchpad || " "}
             </div>
           </div>
         </div>
@@ -209,27 +225,29 @@ export default function CduEmulator({
           ))}
         </div>
 
+        {/* Function key rows — match the real Honeywell E-Jet CDU layout:
+            PERF NAV PREV FPL PROG RTE CB / MENU DLK NEXT EXEC TRS RADIO */}
         <div className="cdu-func-panel">
           <div className="cdu-func-row">
             <button className="cdu-func-key" onClick={() => (onPerf ? onPerf() : handleUnimplemented("PERF"))}>PERF</button>
+            <button className="cdu-func-key" onClick={() => handleUnimplemented("NAV")}>NAV</button>
             <button className="cdu-func-key" onClick={() => (onPrev ? onPrev() : handleUnimplemented("PREV"))}>PREV</button>
-            <button className="cdu-func-key" onClick={() => (onNext ? onNext() : handleUnimplemented("NEXT"))}>NEXT</button>
             <button className="cdu-func-key" onClick={() => (onFpl ? onFpl() : handleUnimplemented("FPL"))}>FPL</button>
             <button className="cdu-func-key" onClick={() => handleUnimplemented("PROG")}>PROG</button>
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("DIR")}>DIR</button>
+            <button className="cdu-func-key" onClick={() => handleUnimplemented("RTE")}>RTE</button>
+            <button className="cdu-func-key" onClick={() => handleUnimplemented("CB")}>CB</button>
+          </div>
+          <div className="cdu-func-row">
+            <button className="cdu-func-key" onClick={() => handleUnimplemented("MENU")}>MENU</button>
+            <button className="cdu-func-key" onClick={() => handleUnimplemented("DLK")}>DLK</button>
+            <button className="cdu-func-key" onClick={() => (onNext ? onNext() : handleUnimplemented("NEXT"))}>NEXT</button>
             <button
               className={`cdu-func-key cdu-exec-key ${execAvailable ? "cdu-exec-active" : ""}`}
               onClick={() => execAvailable && onExec?.()}
             >
               EXEC
             </button>
-          </div>
-          <div className="cdu-func-row">
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("AIRP")}>AIRP</button>
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("VOR")}>VOR</button>
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("NDB")}>NDB</button>
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("FIX")}>FIX</button>
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("LAT/LON")}>LAT<br/>LON</button>
+            <button className="cdu-func-key" onClick={() => handleUnimplemented("TRS")}>TRS</button>
             <button className="cdu-func-key" onClick={() => handleUnimplemented("RADIO")}>RADIO</button>
           </div>
         </div>
@@ -329,6 +347,7 @@ const CDU_CSS = `
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
 .cdu-editable { color: #7fff9e; }
 .cdu-line-error { color: #ff5c4d; }
+.cdu-return-line { color: #f2f2f2; }
 .cdu-scratchpad { color: #fff; font-size: 15px; font-weight: 700; letter-spacing: 1px;
   border-top: 1px solid #333; margin-top: 6px; padding-top: 6px; min-height: 18px; }
 .cdu-scratch-error { color: #ff5c4d; }
