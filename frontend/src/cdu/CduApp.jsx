@@ -143,6 +143,7 @@ export default function CduApp() {
 
   const [tpsResult, setTpsResult] = useState(null); // { content, filename, atow, runway_results, loadsheet_summary }
   const [printPageIndex, setPrintPageIndex] = useState(0);
+  const [resetArmed, setResetArmed] = useState(false); // ACARS RESET confirm latch
 
   // ACARS LOADSHEET (ERJ-170 POH ch.9 sec.16 p.9-73/74) — "AD/CH" is
   // adults/children per cabin section, "BAG/WT" is bag count / freight
@@ -191,7 +192,34 @@ export default function CduApp() {
   // ACARS takeoff workflow this app covers) so their LSKs just report
   // NOT AVAIL, same convention as the unimplemented function keys. The
   // real way into the ACARS app from here is the DLK (datalink) key.
-  function handleMenuCommit() { /* all MENU items are dim — handled in the emulator */ }
+  // ACARS RESET — clears the whole session (flight plan, conditions,
+  // loadsheet, results) back to a cold start. Destructive, so it's two-press:
+  // the first press arms it and the line changes to CONFIRM RESET*, the
+  // second carries it out. Anything else navigating away disarms it.
+  function resetAll() {
+    setXmlData(null);
+    setRunway1(""); setRunway2(""); setRunway3("");
+    setSurface("PLANNED");
+    setOat(""); setQnh(""); setWind(""); setPtow(""); setRelVersion("");
+    setFlapSel("OPTIMUM"); setAntiIce(false); setForceMax(false); setLlwsAdvisory(false);
+    setAdChA(""); setAdChB(""); setAdChC(""); setBagFwd(""); setBagAft("");
+    setFaAcm("2/0"); setCloset("65"); setToFuel(""); setBlstFuel("");
+    setPaxWtA(""); setPaxWtB(""); setPaxWtC(""); setCgPercent("25.0");
+    setTpsResult(null); setAcarsPageIndex(0); setPrintPageIndex(0);
+    setPerfStatus(""); setPerfStatusErr(false);
+    setIdentStatus("ENTER SIMBRIEF ID"); setIdentStatusErr(false);
+    setResetArmed(false);
+  }
+
+  function handleMenuCommit(key) {
+    if (key !== "acarsreset") return; // every other MENU item is dim
+    if (!resetArmed) {
+      setResetArmed(true);
+      return { error: "CONFIRM ACARS RESET" };
+    }
+    resetAll();
+    return { error: "ACARS RESET COMPLETE" };
+  }
 
   const menuFields = [
     { key: "misc",      label: "", value: "◂MISC",        side: "L", dim: true, dimLabel: "MISC" },
@@ -202,7 +230,8 @@ export default function CduApp() {
     { key: "_blank4",   label: "", value: "",              side: "R", editable: false },
     { key: "_blank5",   label: "", value: "",              side: "R", editable: false },
     { key: "_blank6",   label: "", value: "",              side: "R", editable: false },
-    { key: "_blank7",   label: "", value: "",              side: "R", editable: false },
+    { key: "acarsreset",label: "", value: resetArmed ? "CONFIRM RESET*" : "ACARS RESET>",
+      side: "R", editable: true, selectable: true, tone: resetArmed ? undefined : "white", error: resetArmed },
     { key: "mcdumaint", label: "", value: "MCDU MAINT▸",   side: "R", dim: true, dimLabel: "MCDU MAINT" },
     { key: "mcdustat",  label: "", value: "MCDU STAT▸",    side: "R", dim: true, dimLabel: "MCDU STAT" },
   ];
@@ -836,8 +865,10 @@ export default function CduApp() {
       fields: menuFields,
       onFieldCommit: handleMenuCommit,
       execAvailable: false,
-      onDlk: () => setPage("ACARSMENU"), // real workflow: DLK opens the ACARS MAIN MENU
-      onPerf: () => setPage(xmlData ? "PERFWB" : "ACARSMENU"),
+      // Leaving the page disarms the reset confirm — it should never stay
+      // armed across a navigation and fire on a later, unrelated press.
+      onDlk: () => { setResetArmed(false); setPage("ACARSMENU"); },
+      onPerf: () => { setResetArmed(false); setPage(xmlData ? "PERFWB" : "ACARSMENU"); },
     };
   } else if (page === "ACARSMENU") {
     cduProps = {
