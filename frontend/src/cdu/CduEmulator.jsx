@@ -1,14 +1,31 @@
 import { useState, useCallback } from "react";
+import ejetChassis from "./ejet.453de855.png";
 
 // ─── CDU EMULATOR ───────────────────────────────────────────────────────────
 // Generic Honeywell-style CDU "hardware" shell: screen, LSKs, function keys,
 // alpha/numeric keypad. Knows nothing about takeoff performance — the page
 // content (fields, validation, what EXEC does) is entirely supplied by the
 // caller (see CduApp.jsx), so this same component is reused for every CDU
-// page (IDENT / PERF TAKEOFF 1-2 / TPS PRINT).
+// page (IDENT / ACARS TO CONDITIONS 1-2 / ACARS T/O RWY DATA / TPS PRINT).
+//
+// The chassis is the actual WebFMC E-Jet CDU photo/render (ejet.453de855.png)
+// used as a background image, with the screen text, LSK buttons, and keypad
+// keys as transparent absolutely-positioned overlays on top of it — not a
+// hand-drawn CSS chassis. The image's own alpha/numeric keypad and BRT/DIM
+// labels already match what this app needs, so those are just transparent
+// click targets over the image; the image's PERF/PREV/NEXT/FPL/PROG/DIR/EXEC
+// and AIRP/VOR/NDB/FIX/LAT-LON/RADIO function-row labels do NOT match the
+// real Honeywell ACARS function keys, so that whole region is covered with
+// an opaque panel and redrawn with the correct labels.
+//
+// All overlay positions below are percentages estimated by eye from the
+// image (no pixel-measurement tooling was available to derive them
+// precisely) — expect them to need a round of nudging against a real
+// screenshot rather than being exact on the first try.
 //
 // Function key row and screen conventions match the real Honeywell CDU used
-// on E170/175/190/195 (reference: "ACARS TO CONDITIONS 1/2, 2/2" pages):
+// on E170/175/190/195 (reference: real cockpit "ACARS TO CONDITIONS 1/2,
+// 2/2" footage):
 //   PERF NAV PREV FPL PROG RTE CB
 //   MENU DLK NEXT EXEC TRS RADIO
 // and on-screen: a down-arrow (↓) prefixes any field with a fixed set of
@@ -26,9 +43,9 @@ import { useState, useCallback } from "react";
 //   3. If the scratchpad is EMPTY when an LSK is pressed:
 //        - a field marked `cyclable: true` cycles to its next option
 //          (this is a deliberate web-UI affordance for fields with a
-//          small fixed set of choices — RUNWAY, INTERSECTION, SCENARIO,
-//          ANTI-ICE — so the pilot isn't forced to type an exact string
-//          on every change; it is NOT how real CDU hardware behaves).
+//          small fixed set of choices — RUNWAY, SURFACE, ANTI-ICE — so
+//          the pilot isn't forced to type an exact string on every
+//          change; it is NOT how real CDU hardware behaves).
 //        - a field marked `returnLine: true` (a "<RETURN>" line) navigates
 //          back, same mechanism as cycling — see onFieldCommit's null arg.
 //        - otherwise the LSK is a no-op (matches real CDU: empty
@@ -38,16 +55,13 @@ import { useState, useCallback } from "react";
 //      and the scratchpad is NOT cleared so the pilot can see what they
 //      typed and correct it.
 //   5. CLR deletes one character at a time from the scratchpad; DEL
-//      clears it entirely (see original notes — no per-page cursor model
-//      here, so DEL's real "delete field under cursor" behavior would be
-//      meaningless without one).
+//      clears it entirely.
 //   6. PREV/NEXT are wired to real page navigation via the onPrev/onNext
 //      props (optional — falls back to "NOT AVAIL" if the caller doesn't
 //      supply them, e.g. before a flight plan is loaded).
 
 // Runway entries match the real AeroData ACARS convention: a runway id,
-// optionally with "/INTXN" for an intersection takeoff (e.g. "32L/T10" —
-// see ERJ-170 POH ch.9 sec.16, ACARS T/O CONDITION page 1/2, LSK 1L-3L).
+// optionally with "/INTXN" for an intersection takeoff (e.g. "32L/T10").
 const RUNWAY_RE = /^[0-9]{1,2}[LRC]?[XYZ]?(\/[A-Z0-9]{1,6})?$/i;
 
 const FIELD_VALIDATORS = {
@@ -81,6 +95,15 @@ function CduLine({ label, value, side, editable, small, error, cyclable, returnL
     </div>
   );
 }
+
+// Left/right LSK row y-centers as % of the whole chassis image height —
+// eyeballed from the image, evenly spaced starting just below the screen.
+const LSK_ROW_Y = [15.6, 21.0, 26.4, 31.8, 37.2, 42.6];
+
+// Alpha/numeric keypad grid — also eyeballed as % of chassis width/height.
+const ALPHA_ROW_Y = [70.0, 76.6, 83.2, 89.8, 96.4];
+const ALPHA_COL_X = [7.1, 16.8, 26.5, 36.3, 46.0, 55.8];
+const NUM_COL_X = [67.5, 76.1, 84.7, 93.3];
 
 export default function CduEmulator({
   title = "PERF TAKEOFF",
@@ -164,81 +187,57 @@ export default function CduEmulator({
       <style>{CDU_CSS}</style>
 
       <div className="cdu-unit">
-        <div className="cdu-wordmark">Honeywell</div>
-        <div className="cdu-screw cdu-screw-tl" />
-        <div className="cdu-screw cdu-screw-tr" />
-        <div className="cdu-screw cdu-screw-bl" />
-        <div className="cdu-screw cdu-screw-br" />
+        {/* Real <img>, not a CSS background — lets the browser size the
+            container from the file's actual pixel dimensions instead of a
+            guessed aspect-ratio, so the photo can't come out stretched or
+            letterboxed if that guess were wrong. */}
+        <img className="cdu-unit-img" src={ejetChassis} alt="" />
+        {/* ── Screen (positioned over the image's black screen rect) ── */}
+        <div className="cdu-screen">
+          <div className="cdu-screen-header">
+            <span>{title}</span>
+            <span className="cdu-page-num">{pageNum}</span>
+          </div>
 
-        <div className="cdu-light cdu-light-l" />
-        <div className="cdu-light cdu-light-r" />
-
-        <div className="cdu-screen-frame">
-          <div className="cdu-screen">
-            <div className="cdu-screen-header">
-              <span>{title}</span>
-              <span className="cdu-page-num">{pageNum}</span>
-            </div>
-
-            <div className="cdu-screen-body">
-              <div className="cdu-screen-top">
-                <div className="cdu-col cdu-col-left">
-                  {leftFields.map((f, i) => (
-                    <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} />
-                  ))}
-                </div>
-                <div className="cdu-col cdu-col-right">
-                  {rightFields.map((f, i) => (
-                    <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} />
-                  ))}
-                </div>
+          <div className="cdu-screen-body">
+            <div className="cdu-screen-top">
+              <div className="cdu-col cdu-col-left">
+                {leftFields.map((f, i) => (
+                  <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} />
+                ))}
               </div>
-              {/* Center lines (status messages, RETURN, report body text) are
-                  pinned to the BOTTOM of the screen via margin-top:auto below
-                  — matching real CDU pages, where RETURN always sits on the
-                  last LSK row rather than wherever it happens to fall after
-                  the left/right column content. */}
-              <div className="cdu-col cdu-col-center">
-                {centerFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} />
+              <div className="cdu-col cdu-col-right">
+                {rightFields.map((f, i) => (
+                  <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} />
                 ))}
               </div>
             </div>
-
-            <div className={`cdu-scratchpad ${scratchIsError ? "cdu-scratch-error" : ""}`}>
-              {scratchpad || " "}
+            <div className="cdu-col cdu-col-center">
+              {centerFields.map((f, i) => (
+                <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} />
+              ))}
             </div>
+          </div>
+
+          <div className={`cdu-scratchpad ${scratchIsError ? "cdu-scratch-error" : ""}`}>
+            {scratchpad || " "}
           </div>
         </div>
 
-        <div className="cdu-lsk-col cdu-lsk-col-left">
-          {[0, 1, 2, 3, 4, 5].map(i => (
-            <button
-              key={`L${i}`}
-              className="cdu-lsk"
-              onClick={() => handleLsk(leftFields[i])}
-              aria-label={`LSK L${i + 1}`}
-            >
-              <span className="cdu-lsk-notch" />
-            </button>
-          ))}
-        </div>
+        {/* ── LSK hit-targets — transparent, positioned over the image's own button graphics ── */}
+        {LSK_ROW_Y.map((y, i) => (
+          <button key={`L${i}`} className="cdu-lsk cdu-lsk-left" style={{ top: `${y}%` }}
+            onClick={() => handleLsk(leftFields[i])} aria-label={`LSK L${i + 1}`} />
+        ))}
+        {LSK_ROW_Y.map((y, i) => (
+          <button key={`R${i}`} className="cdu-lsk cdu-lsk-right" style={{ top: `${y}%` }}
+            onClick={() => handleLsk(rightFields[i])} aria-label={`LSK R${i + 1}`} />
+        ))}
 
-        <div className="cdu-lsk-col cdu-lsk-col-right">
-          {[0, 1, 2, 3, 4, 5].map(i => (
-            <button
-              key={`R${i}`}
-              className="cdu-lsk"
-              onClick={() => handleLsk(rightFields[i])}
-              aria-label={`LSK R${i + 1}`}
-            >
-              <span className="cdu-lsk-notch" />
-            </button>
-          ))}
-        </div>
-
-        {/* Function key rows — match the real Honeywell E-Jet CDU layout:
-            PERF NAV PREV FPL PROG RTE CB / MENU DLK NEXT EXEC TRS RADIO */}
+        {/* ── Function keys — the image's own labels here (PERF/PREV/NEXT/FPL/
+            PROG/DIR/EXEC, AIRP/VOR/NDB/FIX/LAT-LON/RADIO) don't match the real
+            Honeywell ACARS function keys, so this panel is opaque and covers
+            that whole region instead of relying on the image underneath. ── */}
         <div className="cdu-func-panel">
           <div className="cdu-func-row">
             <button className="cdu-func-key" onClick={() => (onPerf ? onPerf() : handleUnimplemented("PERF"))}>PERF</button>
@@ -264,54 +263,45 @@ export default function CduEmulator({
           </div>
         </div>
 
+        {/* ── BRT/DIM — image's own labels already match, just a transparent hit target ── */}
         <div className="cdu-brt-dim">
-          <button className="cdu-brt-key" onClick={() => {}}>BRT</button>
-          <button className="cdu-brt-key" onClick={() => {}}>DIM</button>
+          <button className="cdu-brt-key" onClick={() => {}} aria-label="BRT" />
+          <button className="cdu-brt-key" onClick={() => {}} aria-label="DIM" />
         </div>
 
-        <div className="cdu-keypad">
-          <div className="cdu-alpha-grid">
-            {"ABCDEF GHIJKL MNOPQR STUVW".match(/.{1,6}/g).map((row, ri) => (
-              <div className="cdu-key-row" key={ri}>
-                {row.split("").map(ch => (
-                  <button key={ch} className="cdu-key cdu-alpha-key" onClick={() => appendChar(ch)}>{ch}</button>
-                ))}
-              </div>
-            ))}
-            <div className="cdu-key-row">
-              <button className="cdu-key cdu-alpha-key" onClick={() => appendChar("X")}>X</button>
-              <button className="cdu-key cdu-alpha-key" onClick={() => appendChar("Y")}>Y</button>
-              <button className="cdu-key cdu-alpha-key" onClick={() => appendChar("Z")}>Z</button>
-              <button className="cdu-key cdu-del-key" onClick={handleDel}>DEL</button>
-              <button className="cdu-key cdu-clr-key" onClick={handleClr}>CLR</button>
-            </div>
-          </div>
+        {/* ── Keypad — image already shows correct labels (A-Z, 0-9, DEL, CLR,
+            +/-, /, SP, .), so these are transparent click targets only ── */}
+        {"ABCDEF".split("").map((ch, i) => (
+          <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[0]}%`, left: `${ALPHA_COL_X[i]}%` }} onClick={() => appendChar(ch)} />
+        ))}
+        {"GHIJK".split("").map((ch, i) => (
+          <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[1]}%`, left: `${ALPHA_COL_X[i + 1]}%` }} onClick={() => appendChar(ch)} />
+        ))}
+        <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[1]}%`, left: `${ALPHA_COL_X[5]}%` }} onClick={() => appendChar("L")} />
+        {"MNOPQR".split("").map((ch, i) => (
+          <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[2]}%`, left: `${ALPHA_COL_X[i]}%` }} onClick={() => appendChar(ch)} />
+        ))}
+        {"STUVW".split("").map((ch, i) => (
+          <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[3]}%`, left: `${ALPHA_COL_X[i]}%` }} onClick={() => appendChar(ch)} />
+        ))}
+        {"XYZ".split("").map((ch, i) => (
+          <button key={ch} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${ALPHA_COL_X[i]}%` }} onClick={() => appendChar(ch)} />
+        ))}
+        <button className="cdu-key cdu-key-wide" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${ALPHA_COL_X[3]}%` }} onClick={handleDel}>DEL</button>
+        <button className="cdu-key cdu-key-wide" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${ALPHA_COL_X[4]}%` }} onClick={handleClr}>CLR</button>
 
-          <div className="cdu-num-grid">
-            <div className="cdu-key-row">
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar("1")}>1</button>
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar("2")}>2</button>
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar("3")}>3</button>
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar("+/-")}>+/-</button>
-            </div>
-            <div className="cdu-key-row">
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar("4")}>4</button>
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar("5")}>5</button>
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar("6")}>6</button>
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar("/")}>/</button>
-            </div>
-            <div className="cdu-key-row">
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar("7")}>7</button>
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar("8")}>8</button>
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar("9")}>9</button>
-            </div>
-            <div className="cdu-key-row">
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar(" ")}>SP</button>
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar("0")}>0</button>
-              <button className="cdu-key cdu-num-key" onClick={() => appendChar(".")}>.</button>
-            </div>
-          </div>
-        </div>
+        {["1", "2", "3", "+/-"].map((v, i) => (
+          <button key={v} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[0]}%`, left: `${NUM_COL_X[i]}%` }} onClick={() => appendChar(v === "+/-" ? "+/-" : v)} />
+        ))}
+        {["4", "5", "6", "/"].map((v, i) => (
+          <button key={v} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[1]}%`, left: `${NUM_COL_X[i]}%` }} onClick={() => appendChar(v)} />
+        ))}
+        {["7", "8", "9"].map((v, i) => (
+          <button key={v} className="cdu-key" style={{ top: `${ALPHA_ROW_Y[2]}%`, left: `${NUM_COL_X[i]}%` }} onClick={() => appendChar(v)} />
+        ))}
+        <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[3]}%`, left: `${NUM_COL_X[0]}%` }} onClick={() => appendChar(" ")} />
+        <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[3]}%`, left: `${NUM_COL_X[1]}%` }} onClick={() => appendChar("0")} />
+        <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[3]}%`, left: `${NUM_COL_X[2]}%` }} onClick={() => appendChar(".")} />
       </div>
     </div>
   );
@@ -322,95 +312,69 @@ const CDU_CSS = `
 .cdu-unit {
   position: relative;
   width: 460px;
-  /* Cooler blue-grey brushed-metal tone matching the real Honeywell Primus
-     Epic MCDU faceplate used on the E-Jet (reference photo), vs. the warmer
-     neutral grey this used before. */
-  background: linear-gradient(180deg, #9fa6ae, #7d8590);
-  border-radius: 18px;
-  padding: 26px 18px 18px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.15);
+  filter: drop-shadow(0 10px 24px rgba(0,0,0,0.5));
   font-family: "Segoe UI", Helvetica, Arial, sans-serif;
 }
-.cdu-wordmark { position: absolute; top: 8px; left: 14px; color: #e8eaed; font-size: 11px;
-  font-weight: 700; letter-spacing: 0.5px; font-style: italic; opacity: 0.85; }
-.cdu-screw { position: absolute; width: 20px; height: 20px; border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #d8d8d8, #8a8a8a 60%, #5a5a5a);
-  box-shadow: inset 0 0 0 2px rgba(0,0,0,0.3); }
-.cdu-screw::after { content: ""; position: absolute; top: 50%; left: 15%; right: 15%; height: 2px;
-  background: rgba(0,0,0,0.4); transform: translateY(-50%) rotate(20deg); }
-.cdu-screw-tl { top: 10px; left: 10px; } .cdu-screw-tr { top: 10px; right: 10px; }
-.cdu-screw-bl { bottom: 10px; left: 10px; } .cdu-screw-br { bottom: 10px; right: 10px; }
+.cdu-unit-img { display: block; width: 100%; height: auto; user-select: none; pointer-events: none; }
 
-.cdu-light { position: absolute; top: 46px; width: 12px; height: 12px; border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #7fffb0, #0a5c2e 70%); box-shadow: 0 0 6px #3f8; }
-.cdu-light-l { left: 22px; } .cdu-light-r { right: 22px; }
-
-.cdu-screen-frame { background: #4a4e53; border-radius: 10px; padding: 12px; margin: 30px 4px 14px; }
-/* Fixed height (not min-height) — a real CDU screen is a physical fixed-size
-   panel, so it must stay the same size on every page. Pages with more
-   content than fits (long ACARS reports) scroll internally instead of
-   growing the screen and changing the whole unit's aspect ratio. */
-.cdu-screen { background: #050505; border-radius: 4px; padding: 10px 12px; height: 260px;
-  display: flex; flex-direction: column; font-family: "Menlo","Courier New",monospace; }
-.cdu-screen-header { display: flex; justify-content: space-between; color: #eaeaea;
-  font-size: 13px; font-weight: 700; letter-spacing: 1px; padding-bottom: 4px; border-bottom: 1px solid #333; }
+/* Screen — positioned over the image's black rect. */
+.cdu-screen { position: absolute; left: 15.5%; top: 6.2%; width: 69%; height: 43.5%;
+  background: #050505; border-radius: 3px; padding: 4% 4%; box-sizing: border-box;
+  display: flex; flex-direction: column; font-family: "Menlo","Courier New",monospace;
+  overflow: hidden; }
+.cdu-screen-header { display: flex; align-items: center; justify-content: space-between; color: #eaeaea;
+  font-size: 11px; font-weight: 700; letter-spacing: 1px; padding-bottom: 3%; border-bottom: 1px solid #333; flex-shrink: 0; }
 .cdu-page-num { color: #7fd0ff; font-weight: 400; }
-.cdu-screen-body { flex: 1; display: flex; flex-direction: column; padding-top: 4px; overflow-y: auto; }
-.cdu-screen-top { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; flex-shrink: 0; }
-.cdu-col { display: flex; flex-direction: column; gap: 6px; }
-/* Center column stretches to fill remaining screen height so a trailing
-   RETURN line can be pinned to the very bottom (see .cdu-line-return-wrap)
-   instead of floating right after whatever content precedes it. Report/
-   print pages with no RETURN field (just paginated text) are unaffected —
-   they stay naturally top-anchored. */
-.cdu-col-center { flex: 1; min-height: 0; padding-top: 10px; }
-.cdu-line-return-wrap { margin-top: auto; }
+.cdu-screen-body { flex: 1; display: flex; flex-direction: column; padding-top: 3%; overflow-y: auto; min-height: 0; }
+.cdu-screen-top { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; flex-shrink: 0; }
+.cdu-col { display: flex; flex-direction: column; gap: 4px; }
+.cdu-col-center { padding-top: 6px; }
+.cdu-line-return-wrap { margin-top: 10px; }
 
-.cdu-line { display: flex; flex-direction: column; line-height: 1.15; }
-.cdu-line-label { color: #7fd0ff; font-size: 10.5px; letter-spacing: 0.5px; }
-.cdu-line-value { color: #f2f2f2; font-size: 15px; font-weight: 600; min-height: 17px; }
-.cdu-line-value.cdu-line-small { font-size: 12.5px; font-weight: 400; }
+.cdu-line { display: flex; flex-direction: column; justify-content: center; min-height: 22px; line-height: 1.1; }
+.cdu-line-label { color: #7fd0ff; font-size: 8.5px; letter-spacing: 0.4px; }
+.cdu-line-value { color: #f2f2f2; font-size: 12px; font-weight: 600; min-height: 13px; }
+.cdu-line-value.cdu-line-small { font-size: 10px; font-weight: 400; }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
 .cdu-editable { color: #7fff9e; }
 .cdu-line-error { color: #ff5c4d; }
 .cdu-return-line { color: #f2f2f2; }
-.cdu-scratchpad { color: #fff; font-size: 15px; font-weight: 700; letter-spacing: 1px;
-  border-top: 1px solid #333; margin-top: 6px; padding-top: 6px; min-height: 18px; }
+.cdu-scratchpad { color: #fff; font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
+  border-top: 1px solid #333; margin-top: 4px; padding-top: 4px; min-height: 14px; flex-shrink: 0; }
 .cdu-scratch-error { color: #ff5c4d; }
 
-.cdu-lsk-col { position: absolute; top: 92px; display: flex; flex-direction: column; gap: 15px; }
-.cdu-lsk-col-left { left: -13px; }
-.cdu-lsk-col-right { right: -13px; }
-.cdu-lsk { width: 34px; height: 15px; background: linear-gradient(180deg, #333, #111);
-  border: 1px solid #000; border-radius: 3px; cursor: pointer; padding: 0;
-  box-shadow: 0 2px 3px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.15); }
-.cdu-lsk:active { transform: translateY(1px); box-shadow: inset 0 1px 3px rgba(0,0,0,0.8); }
-.cdu-lsk-notch { display: block; width: 16px; height: 2px; background: #ccc; margin: 6px auto 0; }
+/* LSK hit-targets — transparent, sit right on top of the image's own button
+   graphics. Width/height are generous (wider than the visible button) so a
+   slightly-off estimate still catches clicks near the real button. */
+.cdu-lsk { position: absolute; width: 11%; height: 3%; transform: translateY(-50%);
+  background: transparent; border: none; cursor: pointer; padding: 0; }
+.cdu-lsk-left { left: 0%; }
+.cdu-lsk-right { right: 0%; }
+.cdu-lsk:active { background: rgba(255,255,255,0.08); }
 
-.cdu-func-panel { background: #8b9198; border-radius: 8px; padding: 8px; margin-bottom: 8px; }
-.cdu-func-row { display: flex; gap: 4px; margin-bottom: 4px; }
-.cdu-func-row:last-child { margin-bottom: 0; }
+/* Function key panel — OPAQUE, covers the image's PERF/PREV/.../RADIO row
+   (whose labels don't match) and redraws it with the real ACARS keys. */
+.cdu-func-panel { position: absolute; left: 2%; top: 51.5%; width: 96.5%; height: 14.5%;
+  background: #8b9198; border-radius: 6px; padding: 3%; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 4%; }
+.cdu-func-row { display: flex; gap: 3%; flex: 1; }
 .cdu-func-key { flex: 1; background: linear-gradient(180deg, #2b2b2e, #101012); color: #eee;
-  border: 1px solid #000; border-radius: 5px; font-size: 11px; font-weight: 600; padding: 8px 2px;
+  border: 1px solid #000; border-radius: 4px; font-size: 9.5px; font-weight: 600; padding: 0 2px;
   cursor: pointer; box-shadow: 0 2px 2px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1); line-height: 1.1; }
 .cdu-func-key:active { transform: translateY(1px); }
 .cdu-exec-key { opacity: 0.45; }
 .cdu-exec-active { opacity: 1; box-shadow: 0 0 8px #3f8, inset 0 1px 0 rgba(255,255,255,0.2); }
 
-.cdu-brt-dim { position: absolute; top: 340px; right: -6px; background: #8b9198; border-radius: 6px;
-  padding: 4px; display: flex; flex-direction: column; gap: 4px; }
-.cdu-brt-key { background: linear-gradient(180deg, #2b2b2e, #101012); color: #eee; border: 1px solid #000;
-  border-radius: 4px; font-size: 9px; font-weight: 700; padding: 4px 8px; cursor: pointer; }
+/* BRT/DIM — transparent hit targets, image already shows the correct labels. */
+.cdu-brt-dim { position: absolute; right: 1%; top: 51.5%; width: 11%; height: 14.5%;
+  display: flex; flex-direction: column; }
+.cdu-brt-key { flex: 1; background: transparent; border: none; cursor: pointer; padding: 0; }
 
-.cdu-keypad { background: #7a8089; border-radius: 8px; padding: 10px; display: flex; gap: 10px; }
-.cdu-alpha-grid { flex: 1; display: flex; flex-direction: column; gap: 5px; }
-.cdu-num-grid { display: flex; flex-direction: column; gap: 5px; }
-.cdu-key-row { display: flex; gap: 5px; }
-.cdu-key { background: radial-gradient(circle at 30% 30%, #3a3a3d, #0d0d0f 75%); color: #f0f0f0;
-  border: 1px solid #000; border-radius: 6px; font-size: 13px; font-weight: 700;
-  width: 32px; height: 32px; cursor: pointer; box-shadow: 0 2px 2px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.12); }
-.cdu-key:active { transform: translateY(1px); box-shadow: inset 0 1px 4px rgba(0,0,0,0.8); }
-.cdu-num-key { border-radius: 50%; }
-.cdu-del-key, .cdu-clr-key { width: 44px; font-size: 10px; }
+/* Keypad keys — transparent hit targets positioned over the image's own
+   labeled buttons (A-Z, 0-9, +/-, /, SP, ., DEL, CLR all already correct). */
+.cdu-key { position: absolute; width: 7.5%; height: 4.8%; transform: translate(-50%, -50%);
+  background: transparent; border: none; color: transparent; cursor: pointer; padding: 0; }
+.cdu-key-wide { width: 9%; }
+.cdu-key:active { background: rgba(255,255,255,0.1); border-radius: 4px; }
 `;
