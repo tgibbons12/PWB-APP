@@ -18,6 +18,11 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 // footage of the Honeywell Primus Epic MCDU running this exact software
 // (highest-fidelity source — takes precedence over the ERJ-170 POH excerpt
 // and the printed COMBINED.txt sample where they disagree on wording):
+//   MENU                 — real top-level MENU page (matches a live WebFMC
+//                          screenshot exactly: ◂MISC/◂BKUP RADIO/MCDU
+//                          MAINT▸/MCDU STAT▸, none implemented — this app
+//                          only covers the ACARS takeoff workflow). This is
+//                          the app's starting page; DLK opens the ACARS app.
 //   IDENT                — enter a SimBrief username, fetch + parse the OFP
 //   ACARS TO CONDITIONS 1/2 — KLAX RWY 1/2/3 (departure ICAO + slot; a bare
 //                          runway id, or "RWY/INTXN" for an intersection
@@ -74,7 +79,7 @@ const SURFACE_SHORTHAND = { PLANNED: "PLANNED", DRY: "DRY_PTOW", WET: "WET_PTOW"
 const LINES_PER_PRINT_PAGE = 11;
 
 export default function CduApp() {
-  const [page, setPage] = useState("IDENT"); // IDENT | COND1 | COND2 | ACARS | PRINT
+  const [page, setPage] = useState("MENU"); // MENU | IDENT | COND1 | COND2 | ACARS | PRINT
   const [acarsPageIndex, setAcarsPageIndex] = useState(0); // 0=summary 1=remarks 2..=perf per runway
 
   const [xmlData, setXmlData] = useState(null);
@@ -122,6 +127,32 @@ export default function CduApp() {
   // SECT A/B/C, GTOW/CG, ZFW/CG, FOB, TOT PAX, REMARKS) — field names and
   // groupings confirmed against a live-generated COMBINED.txt sample.
   const loadsheetSummary = tpsResult?.loadsheet_summary ?? null;
+
+  // ── MENU page — the app's starting page, matches the real Honeywell/
+  // WebFMC top-level MENU screen exactly: ◂MISC and ◂BKUP RADIO on the
+  // left (rows 1 and 5), MCDU MAINT▸ and MCDU STAT▸ on the right (rows 5
+  // and 6). None of those four are implemented (they're not part of the
+  // ACARS takeoff workflow this app covers) so their LSKs just report
+  // NOT AVAIL, same convention as the unimplemented function keys. The
+  // real way into the ACARS app from here is the DLK (datalink) key.
+  function handleMenuCommit(key) {
+    const labels = { misc: "MISC", bkupradio: "BKUP RADIO", mcdumaint: "MCDU MAINT", mcdustat: "MCDU STAT" };
+    if (labels[key]) return { error: `${labels[key]} NOT AVAIL` };
+  }
+
+  const menuFields = [
+    { key: "misc",      label: "", value: "◂MISC",        side: "L", editable: true, selectable: true },
+    { key: "_blank1",   label: "", value: "",              side: "L", editable: false },
+    { key: "_blank2",   label: "", value: "",              side: "L", editable: false },
+    { key: "_blank3",   label: "", value: "",              side: "L", editable: false },
+    { key: "bkupradio", label: "", value: "◂BKUP RADIO",   side: "L", editable: true, selectable: true },
+    { key: "_blank4",   label: "", value: "",              side: "R", editable: false },
+    { key: "_blank5",   label: "", value: "",              side: "R", editable: false },
+    { key: "_blank6",   label: "", value: "",              side: "R", editable: false },
+    { key: "_blank7",   label: "", value: "",              side: "R", editable: false },
+    { key: "mcdumaint", label: "", value: "MCDU MAINT▸",   side: "R", editable: true, selectable: true },
+    { key: "mcdustat",  label: "", value: "MCDU STAT▸",    side: "R", editable: true, selectable: true },
+  ];
 
   // ── IDENT page ─────────────────────────────────────────────────────────────
   const doFetch = useCallback(async (username) => {
@@ -468,13 +499,23 @@ export default function CduApp() {
 
   // ── Page config dispatch ──────────────────────────────────────────────────
   let cduProps;
-  if (page === "IDENT") {
+  if (page === "MENU") {
+    cduProps = {
+      title: "MENU", pageNum: "1/1",
+      fields: menuFields,
+      onFieldCommit: handleMenuCommit,
+      execAvailable: false,
+      onDlk: () => setPage("IDENT"), // real workflow: DLK opens the datalink/ACARS app
+      onPerf: () => setPage(xmlData ? "COND1" : "IDENT"),
+    };
+  } else if (page === "IDENT") {
     cduProps = {
       title: "IDENT", pageNum: "1/1",
       fields: identFields,
       onFieldCommit: handleIdentCommit,
       execAvailable: !xmlData && !loadingPlan && simbriefUsername.trim().length > 0,
       onExec: () => doFetch(simbriefUsername.trim()),
+      onPrev: () => setPage("MENU"),
       onNext: xmlData ? () => setPage("COND1") : undefined,
       onPerf: xmlData ? () => setPage("COND1") : undefined,
     };
@@ -535,7 +576,9 @@ export default function CduApp() {
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#1c1c1e" }}>
-      <CduEmulator {...cduProps} />
+      {/* MENU key always jumps to the top-level MENU page, same on every
+          page — set once here rather than repeated in every branch above. */}
+      <CduEmulator onMenu={() => setPage("MENU")} {...cduProps} />
     </div>
   );
 }

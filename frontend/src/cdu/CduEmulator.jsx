@@ -142,7 +142,8 @@ export default function CduEmulator({
   onNext,          // optional: NEXT function key
   onPerf,          // optional: PERF function key
   onFpl,           // optional: FPL function key (repurposed as PRINT/DOWNLOAD on the TPS print page)
-  onDlk,           // optional: DLK function key (repurposed as "send ACARS request" — same trigger as EXEC, matches the real workflow where DLK sends the datalink request)
+  onDlk,           // optional: DLK function key (repurposed as "send ACARS request" — same trigger as EXEC, matches the real workflow where DLK sends the datalink request; on the MENU page it's repurposed again as "enter the ACARS app")
+  onMenu,          // optional: MENU function key — real hardware always jumps to the top-level MENU page from anywhere
 }) {
   const [scratchpad, setScratchpad] = useState("");
   const [scratchIsError, setScratchIsError] = useState(false);
@@ -174,8 +175,8 @@ export default function CduEmulator({
     if (!field) return; // clicked an LSK with nothing bound on that line
 
     if (!scratchpad) {
-      if (field.editable && (field.cyclable || field.returnLine)) {
-        const result = onFieldCommit?.(field.key, null); // null = "cycle to next option" / "return"
+      if (field.editable && (field.cyclable || field.returnLine || field.selectable)) {
+        const result = onFieldCommit?.(field.key, null); // null = "cycle to next option" / "return" / "select"
         if (result && result.error) {
           setScratchpad(result.error);
           setScratchIsError(true);
@@ -297,7 +298,7 @@ export default function CduEmulator({
             <button className="cdu-func-key" onClick={() => handleUnimplemented("CB")}>CB</button>
           </div>
           <div className="cdu-func-row">
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("MENU")}>MENU</button>
+            <button className="cdu-func-key" onClick={() => (onMenu ? onMenu() : handleUnimplemented("MENU"))}>MENU</button>
             <button className={`cdu-func-key ${onDlk && execAvailable ? "cdu-exec-active" : ""}`} onClick={() => (onDlk ? onDlk() : handleUnimplemented("DLK"))}>DLK</button>
             <button className="cdu-func-key" onClick={() => (onNext ? onNext() : handleUnimplemented("NEXT"))}>NEXT</button>
             <button
