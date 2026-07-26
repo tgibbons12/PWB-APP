@@ -441,61 +441,55 @@ def generate():
     tow_lbs = loadsheet_data["TOW"]
     atow_lbs = tow_lbs + 2000
 
-    # ---- Runway selection + manual speed overrides ----
-    # runway == "ALL" requests every published runway in one ACARS-style
-    # request, matching the real AeroData CDU's "ACARS T/O RWY DATA" report,
-    # which returns one TAKEOFF PERFORMANCE block per requested runway
-    # (pages 3/5, 4/5, 5/5 etc. — one page per runway, up to 3 at a time).
-    # Intersection substitution and per-field speed overrides are tuned for
-    # a single runway, so both are skipped in ALL mode — every runway is
-    # reported at its full published length with computed (non-overridden)
-    # speeds, same as the real system's multi-runway request.
-    runway_id = body.get("runway")
-    all_runways = runway_id == "ALL"
-    if all_runways:
-        selected_runways = list(xml_data.get("valid_runways", []))
-        if not selected_runways:
-            return _error("No runways available in xml_data.valid_runways.")
-    else:
-        selected_runways = [r for r in xml_data.get("valid_runways", []) if r.get("id") == runway_id]
-        if not selected_runways:
-            return _error(f"Runway '{runway_id}' not found in xml_data.valid_runways.")
-
-    # ---- Intersection selection ----
-    # xml_data["intersections"][runway_id] is a list of {"id","label","tora_ft"}
-    # built by _build_intersections() (see /api/flightplan). "FULL" is always
-    # the first entry and means "use the runway's full published length" —
-    # anything else means an intersection takeoff, which reduces the usable
-    # TORA below what the SimBrief-provided full length said.
+    # ---- Runway selection ----
+    # Matches the real AeroData ACARS T/O CONDITION 1/2 page (ERJ-170 POH
+    # ch.9 sec.16): the pilot enters up to 3 runways (KIND RWY 1/2/3), each
+    # either a bare runway id ("23L") or "RWY/INTXN" for an intersection
+    # takeoff ("32L/T10") — the intersection substitution changes both the
+    # TLR-table lookup id and the usable length/slope the same way it always
+    # did here, just driven by the suffix instead of a separate field.
     #
-    # This substitution is what makes intersection selection actually affect
-    # the generated TPS: it changes BOTH (a) the runway id used for TLR-table
-    # lookup — so if the TLR text has a real row for e.g. "31LX", that row's
-    # published V-speeds are used directly instead of us estimating anything
-    # — and (b) the 'length' field used for the printed LENGTH/slope block
-    # when no TLR match exists and SimBrief's raw-length-based logic applies.
-    # Previously this value was accepted by the API but silently dropped —
-    # selecting an intersection had no effect on anything.
-    intersection_id = body.get("intersection", "FULL")
-    if not all_runways and intersection_id and intersection_id != "FULL":
-        intxn_options = xml_data.get("intersections", {}).get(runway_id, [])
-        matched = next((o for o in intxn_options if o.get("id") == intersection_id), None)
-        if matched is None:
-            return _error(
-                f"Intersection '{intersection_id}' not found for runway '{runway_id}'.",
-                status=422,
-            )
-        selected_runways = [
-            dict(r, id=matched["id"], length=matched["tora_ft"], _full_tora_ft=r.get("length"))
-            for r in selected_runways
-        ]
+    # "runways" (list) is the current UI's payload. "runway" (+ optional
+    # "intersection", or "ALL" for every published runway) is kept working
+    # for older clients/tests.
+    runway_entries = body.get("runways")
+    if runway_entries is None:
+        legacy_runway = body.get("runway")
+        if legacy_runway == "ALL":
+            runway_entries = [r.get("id") for r in xml_data.get("valid_runways", [])]
+        else:
+            legacy_intxn = body.get("intersection", "FULL")
+            suffix = f"/{legacy_intxn}" if legacy_intxn and legacy_intxn != "FULL" else ""
+            runway_entries = [f"{legacy_runway}{suffix}"] if legacy_runway else []
 
+    runway_entries = [e.strip().upper() for e in runway_entries if e and e.strip()]
+    if not runway_entries:
+        return _error("At least one runway must be entered (KIND RWY 1).")
+
+    valid_runways_by_id = {r.get("id"): r for r in xml_data.get("valid_runways", [])}
+    intersections_map = xml_data.get("intersections", {})
+    selected_runways = []
+    for entry in runway_entries:
+        base_id, _, intxn_id = entry.partition("/")
+        match = valid_runways_by_id.get(base_id)
+        if match is None:
+            return _error(f"Runway '{base_id}' not found in xml_data.valid_runways.")
+        if intxn_id:
+            intxn_options = intersections_map.get(base_id, [])
+            matched_intxn = next((o for o in intxn_options if o.get("id") == intxn_id), None)
+            if matched_intxn is None:
+                return _error(f"Intersection '{intxn_id}' not found for runway '{base_id}'.", status=422)
+            match = dict(match, id=matched_intxn["id"], length=matched_intxn["tora_ft"], _full_tora_ft=match.get("length"))
+        selected_runways.append(match)
+
+    # ---- FLAP override (ACARS T/O CONDITION 2/2, LSK 1L) ----
     speed_overrides = body.get("speedOverrides", {})
-    if not all_runways and speed_overrides:
+    if speed_overrides:
         # Applied the same way rwy.get('_widget_overrides', {}) is re-applied
         # inside generate_tps() after TLR interpolation — user edits win last.
         selected_runways = [dict(r, _widget_overrides=speed_overrides) for r in selected_runways]
 
+    # ---- THRUST (ACARS T/O CONDITION 2/2, LSK 3L: NORMAL=flex / MAX) ----
     force_max = bool(body.get("forceMax", False))
     if force_max:
         for r in selected_runways:

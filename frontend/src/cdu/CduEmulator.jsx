@@ -45,13 +45,16 @@ import { useState, useCallback } from "react";
 //      props (optional — falls back to "NOT AVAIL" if the caller doesn't
 //      supply them, e.g. before a flight plan is loaded).
 
+// Runway entries match the real AeroData ACARS convention: a runway id,
+// optionally with "/INTXN" for an intersection takeoff (e.g. "32L/T10" —
+// see ERJ-170 POH ch.9 sec.16, ACARS T/O CONDITION page 1/2, LSK 1L-3L).
+const RUNWAY_RE = /^[0-9]{1,2}[LRC]?[XYZ]?(\/[A-Z0-9]{1,6})?$/i;
+
 const FIELD_VALIDATORS = {
-  flex: (v) => /^-?\d{1,3}$/.test(v) ? v : null,
-  flaps: (v) => /^\d{1,2}$/.test(v) ? v : null,
-  v1: (v) => /^\d{2,3}$/.test(v) ? v : null,
-  vr: (v) => /^\d{2,3}$/.test(v) ? v : null,
-  v2: (v) => /^\d{2,3}$/.test(v) ? v : null,
-  runway: (v) => /^([0-9]{1,2}[LRC]?[XYZ]?|ALL)$/.test(v.toUpperCase()) ? v.toUpperCase() : null,
+  rwy1: (v) => RUNWAY_RE.test(v) ? v.toUpperCase() : null,
+  rwy2: (v) => RUNWAY_RE.test(v) ? v.toUpperCase() : null,
+  rwy3: (v) => RUNWAY_RE.test(v) ? v.toUpperCase() : null,
+  oatqnh: (v) => /^-?\d{1,3}\/\d{1,2}\.\d{1,2}$/.test(v) ? v : null,
   simbrief: (v) => /^[A-Za-z0-9_\-.]{1,24}$/.test(v) ? v : null,
 };
 

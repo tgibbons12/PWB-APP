@@ -14,59 +14,60 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 // in one printout), not the later TPS-app's split generate_tps()/
 // generate_closeout(). See backend/takeoff_perf_core.py.
 //
-// Page flow (PREV/NEXT cycle through these once a flight plan is loaded):
-//   IDENT             — enter a SimBrief username, fetch + parse the OFP
-//   PERF TAKEOFF 1/2   — runway, intersection, TLR scenario, anti-ice, conditions
-//   PERF TAKEOFF 2/2   — V1/VR/V2/FLEX/FLAPS overrides, EXEC/DLK -> /api/generate
-//   ACARS T/O RWY DATA — authentic 3-page ACARS report, modeled on the real
-//                         Honeywell AeroData "ACARS Takeoff Runway Data" pages
-//                         (ERJ-170 POH ch.9 sec.16):
-//                           1/3 loadsheet summary (FLT/RLS/TIME, WIND/OAT/QNH,
-//                               SECT A/B/C, GTOW/CG, ZFW/CG, TTL PAX, status)
-//                           2/3 REMARKS
-//                           3/3 TAKEOFF PERFORMANCE (V1/VR/V2/FLAPS/FLEX/THR/
-//                               ACC ALT/TR ALT/TRIM/MRTW), from the backend's
-//                               runway_results (JSON, not parsed out of text)
-//   TPS PRINT           — the full generated ACARS text, paginated like a real
-//                         CDU TEXT/REPORTS page, with a PRINT (download) key
+// Page flow and field layout below are taken directly from the ERJ-170 POH
+// (Chapter 9, Section 16, "AeroData ACARS Performance System") — the request
+// pages mirror the real ACARS T/O CONDITION 1/2 and 2/2 screens field-for-
+// field, and the report pages mirror a live-generated ACARS COMBINED.txt
+// sample exactly (labels, groupings, and the one-block-per-runway pattern):
+//   IDENT                — enter a SimBrief username, fetch + parse the OFP
+//   ACARS T/O COND 1/2   — KIND RWY 1/2/3 (runway, or "RWY/INTXN" for an
+//                          intersection takeoff, up to 3 requested runways
+//                          at once — matches the real system's 3-runway
+//                          limit), SURFACE, WIND, OAT/QNH (one combined
+//                          field on real hardware)
+//   ACARS T/O COND 2/2   — FLAP (OPT/1/2/4), ANTI-ICE (OFF/ALL), THRUST
+//                          (NORMAL/MAX) — DLK/EXEC sends the request,
+//                          same as the real DATALINK SEND* key
+//   ACARS T/O RWY DATA   — loadsheet summary (FLT/RLS/SECT A/B/C/GTOW-CG/
+//                          ZFW-CG/FOB/TOT PAX), REMARKS, then one TAKEOFF
+//                          PERFORMANCE page per requested runway
+//   TPS PRINT            — the full generated ACARS text, paginated like a
+//                          real CDU TEXT/REPORTS page, with a PRINT key
 //
-// Known simplifications vs. a full ops UI:
-//   - No raw-XML paste fallback — SimBrief username only. Typing a full XML
-//     document on a CDU keypad isn't a realistic interaction anyway.
+// Known simplifications vs. the real system:
+//   - No raw-XML paste fallback — SimBrief username only.
+//   - No separate ACARS LOADSHEET request — the backend returns loadsheet
+//     summary + takeoff performance together in one call, so there's no
+//     standalone "W&B LOADSHEET>" shortcut page.
+//   - No PTOW (planned takeoff weight) preview field, and no contamination
+//     depth (LEVEL 1/2/3) for SURFACE — the backend's TLR interpolation
+//     only has DRY/WET tables, not compacted-snow/wet-ice/contaminated.
 //   - No Closeout tab — that flow depends on a LOCAL backend running on the
-//     ops Mac (OOOI log + printer folder access) and doesn't map onto the
-//     keypad-driven commit model well.
-//   - V1/VR/V2/FLEX/FLAPS shown on PERF TAKEOFF 1/2 are the SimBrief XML
-//     values (or intersection-substituted ones) — TLR-scenario-interpolated
-//     numbers only exist after EXEC. The ACARS T/O RWY DATA and TPS PRINT
-//     pages show the authoritative result.
+//     ops Mac and doesn't map onto the keypad-driven commit model well.
 
 const SCENARIO_DEFS = [
-  { key: "DRY_PTOW",      surface: "DRY", cond: "PTOW",      label: "DRY PTOW"  },
-  { key: "DRY_PTOW+4000", surface: "DRY", cond: "PTOW+4000", label: "DRY +4000" },
-  { key: "WET_PTOW",      surface: "WET", cond: "PTOW",      label: "WET PTOW"  },
-  { key: "WET_PTOW+4000", surface: "WET", cond: "PTOW+4000", label: "WET +4000" },
+  { key: "DRY_PTOW", surface: "DRY", cond: "PTOW", label: "DRY" },
+  { key: "WET_PTOW", surface: "WET", cond: "PTOW", label: "WET" },
 ];
-const SCENARIO_LABELS = { PLANNED: "PLANNED", ...Object.fromEntries(SCENARIO_DEFS.map(d => [d.key, d.label])) };
-const SCENARIO_SHORTHAND = {
-  PLAN: "PLANNED", PLANNED: "PLANNED",
-  DRY1: "DRY_PTOW", "DRY+4000": "DRY_PTOW+4000", DRY2: "DRY_PTOW+4000",
-  WET1: "WET_PTOW", WET2: "WET_PTOW+4000",
-};
 
 function tlrAvail(xmlData, surface, cond) {
   return !!(xmlData?.tlr_tables?.[surface]?.[cond]);
 }
 
-function availableScenarios(xmlData) {
+// Real ACARS SURFACE field: PLANNED (no override — use computed/XML
+// defaults) plus whichever of DRY/WET this flight plan has TLR data for.
+function availableSurfaces(xmlData) {
   return ["PLANNED", ...SCENARIO_DEFS.filter(d => tlrAvail(xmlData, d.surface, d.cond)).map(d => d.key)];
 }
+
+const SURFACE_LABELS = { PLANNED: "PLANNED", ...Object.fromEntries(SCENARIO_DEFS.map(d => [d.key, d.label])) };
+const SURFACE_SHORTHAND = { PLANNED: "PLANNED", DRY: "DRY_PTOW", WET: "WET_PTOW" };
 
 const LINES_PER_PRINT_PAGE = 11;
 
 export default function CduApp() {
-  const [page, setPage] = useState("IDENT"); // IDENT | PERF1 | PERF2 | ACARS | PRINT
-  const [acarsPageIndex, setAcarsPageIndex] = useState(0); // 0=summary 1=remarks 2=perf
+  const [page, setPage] = useState("IDENT"); // IDENT | COND1 | COND2 | ACARS | PRINT
+  const [acarsPageIndex, setAcarsPageIndex] = useState(0); // 0=summary 1=remarks 2..=perf per runway
 
   const [xmlData, setXmlData] = useState(null);
   const [simbriefUsername, setSimbriefUsername] = useState(
@@ -76,47 +77,39 @@ export default function CduApp() {
   const [identStatus, setIdentStatus] = useState("ENTER SIMBRIEF ID");
   const [identStatusErr, setIdentStatusErr] = useState(false);
 
-  const [runway, setRunway] = useState("");
-  const [intersection, setIntersection] = useState("FULL");
-  const [scenario, setScenario] = useState("PLANNED");
-  const [antiIce, setAntiIce] = useState(false);
+  // ACARS T/O CONDITION 1/2 — KIND RWY 1/2/3, SURFACE, WIND, OAT/QNH
+  const [runway1, setRunway1] = useState("");
+  const [runway2, setRunway2] = useState("");
+  const [runway3, setRunway3] = useState("");
+  const [surface, setSurface] = useState("PLANNED");
   const [oat, setOat] = useState("");
   const [qnh, setQnh] = useState("");
   const [wind, setWind] = useState("");
 
-  const [speedOverrides, setSpeedOverrides] = useState({});
-  const [forceMax, setForceMax] = useState(false);
+  // ACARS T/O CONDITION 2/2 — FLAP, ANTI-ICE, THRUST
+  const [flapSel, setFlapSel] = useState("OPT"); // OPT | 1 | 2 | 4
+  const [antiIce, setAntiIce] = useState(false); // OFF | ALL
+  const [forceMax, setForceMax] = useState(false); // NORMAL (flex) | MAX
 
   const [generating, setGenerating] = useState(false);
   const [perfStatus, setPerfStatus] = useState("");
   const [perfStatusErr, setPerfStatusErr] = useState(false);
 
-  const [tpsResult, setTpsResult] = useState(null); // { content, filename, atow, runway_results }
+  const [tpsResult, setTpsResult] = useState(null); // { content, filename, atow, runway_results, loadsheet_summary }
   const [printPageIndex, setPrintPageIndex] = useState(0);
 
   // ── Data helpers ──────────────────────────────────────────────────────────
-  const allRunwaysSelected = runway === "ALL";
-  const rwyData = xmlData?.valid_runways?.find(r => r.id === runway) ?? xmlData?.valid_runways?.[0] ?? null;
-  // "ALL" requests every published runway in one ACARS request (matches the
-  // real system's multi-runway report) — intersections are per-runway, so
-  // only FULL length applies when ALL is selected.
-  const intxnOptions = allRunwaysSelected
-    ? [{ id: "FULL", label: "FULL" }]
-    : (xmlData?.intersections?.[rwyData?.id]) ?? [{ id: "FULL", label: "FULL" }];
-  const scenarioChoices = availableScenarios(xmlData);
+  const runwayIds = xmlData?.valid_runways?.map(r => r.id) ?? [];
+  const surfaceChoices = availableSurfaces(xmlData);
   const conditionsEdited = !!xmlData && (oat !== xmlData.temp || qnh !== xmlData.qnh || wind !== xmlData.wind);
   // Authoritative post-EXEC results — one entry per requested runway, matches
   // the {airport,runway,length,v1,vr,v2,vfs,flex,flaps,trim_stab,mrtw,mtow,
   // gtow_cg,acc_alt,...} shape computed server-side by generate_combined_output().
   const runwayResults = tpsResult?.runway_results ?? [];
   // Authentic ACARS T/O RWY DATA loadsheet summary (FLT/RLS/TIME, WIND/OAT/QNH,
-  // SECT A/B/C, GTOW/CG, ZFW/CG, TTL PAX, REMARKS) — matches the ERJ-170 POH
-  // "ACARS Takeoff Runway Data" reference pages, computed server-side.
+  // SECT A/B/C, GTOW/CG, ZFW/CG, FOB, TOT PAX, REMARKS) — field names and
+  // groupings confirmed against a live-generated COMBINED.txt sample.
   const loadsheetSummary = tpsResult?.loadsheet_summary ?? null;
-
-  function getSpeed(k) {
-    return speedOverrides[k] ?? rwyData?.[k] ?? "";
-  }
 
   // ── IDENT page ─────────────────────────────────────────────────────────────
   const doFetch = useCallback(async (username) => {
@@ -132,21 +125,22 @@ export default function CduApp() {
       const initRunway = data.valid_runways.some(r => r.id === data.plan_rwy)
         ? data.plan_rwy
         : (data.valid_runways[0]?.id ?? "");
-      setRunway(initRunway);
-      setIntersection("FULL");
-      setScenario("PLANNED");
+      setRunway1(initRunway);
+      setRunway2("");
+      setRunway3("");
+      setSurface("PLANNED");
+      setFlapSel("OPT");
       setAntiIce(false);
+      setForceMax(false);
       setOat(data.temp);
       setQnh(data.qnh);
       setWind(data.wind);
-      setSpeedOverrides({});
-      setForceMax(false);
       setTpsResult(null);
       setPrintPageIndex(0);
 
       setIdentStatus(`OFP LOADED — FLT ${data.flight_number} ${data.origin_iata}-${data.dest_iata}`);
       setIdentStatusErr(false);
-      setPage("PERF1");
+      setPage("COND1");
     } catch (e) {
       setIdentStatus(e instanceof ApiError ? e.message.toUpperCase() : "COULD NOT REACH SERVER");
       setIdentStatusErr(true);
@@ -170,124 +164,102 @@ export default function CduApp() {
     ] : []),
   ];
 
-  // ── PERF TAKEOFF 1/2 — runway / intersection / scenario / conditions ──────
-  function handlePerf1Commit(key, value) {
+  // ── ACARS T/O CONDITION 1/2 — KIND RWY 1/2/3, SURFACE, WIND, OAT/QNH ───────
+  function cycleRunwaySlot(current, setter) {
+    const opts = ["", ...runwayIds];
+    const idx = opts.indexOf(current);
+    setter(opts[(idx + 1) % opts.length]);
+  }
+
+  function handleCond1Commit(key, value) {
     if (key === "return") {
       if (value === null) setPage("IDENT");
       return;
     }
-    if (key === "runway") {
-      // Cycle: each published runway, then "ALL" (request every runway in
-      // one ACARS request, like the real system's multi-runway report),
-      // then back to the first.
-      const runways = xmlData.valid_runways;
-      const cycleIds = [...runways.map(r => r.id), "ALL"];
-      if (value === null) {
-        const idx = cycleIds.indexOf(runway);
-        const next = cycleIds[(idx + 1) % cycleIds.length];
-        setRunway(next); setIntersection("FULL"); setSpeedOverrides({});
-        return;
-      }
-      const typed = value.toUpperCase();
-      if (typed === "ALL") {
-        setRunway("ALL"); setIntersection("FULL"); setSpeedOverrides({});
-        return;
-      }
-      const match = runways.find(r => r.id === typed);
-      if (!match) return { error: "INVALID ENTRY" };
-      setRunway(match.id); setIntersection("FULL"); setSpeedOverrides({});
+    if (key === "rwy1" || key === "rwy2" || key === "rwy3") {
+      const setter = key === "rwy1" ? setRunway1 : key === "rwy2" ? setRunway2 : setRunway3;
+      const current = key === "rwy1" ? runway1 : key === "rwy2" ? runway2 : runway3;
+      if (value === null) { cycleRunwaySlot(current, setter); return; }
+      // Validate the base runway id (before any "/INTXN" suffix) against
+      // this flight plan's published runways.
+      const [base] = value.split("/");
+      if (!runwayIds.includes(base)) return { error: "INVALID ENTRY" };
+      setter(value);
       return;
     }
-    if (key === "intxn") {
+    if (key === "surface") {
       if (value === null) {
-        const idx = intxnOptions.findIndex(o => o.id === intersection);
-        const next = intxnOptions[(idx + 1) % intxnOptions.length];
-        setIntersection(next.id);
+        const idx = surfaceChoices.indexOf(surface);
+        setSurface(surfaceChoices[(idx + 1) % surfaceChoices.length]);
         return;
       }
-      const match = intxnOptions.find(o => o.id === value.toUpperCase());
-      if (!match) return { error: "INVALID ENTRY" };
-      setIntersection(match.id);
+      const mapped = SURFACE_SHORTHAND[value.toUpperCase()];
+      if (!mapped || !surfaceChoices.includes(mapped)) return { error: "INVALID ENTRY" };
+      setSurface(mapped);
       return;
     }
-    if (key === "scen") {
+    if (key === "wind") { setWind(value); return; }
+    if (key === "oatqnh") {
+      const [o, q] = value.split("/");
+      if (o === undefined || q === undefined) return { error: "INVALID ENTRY" };
+      setOat(o); setQnh(q);
+      return;
+    }
+  }
+
+  const cond1Fields = xmlData ? [
+    { key: "rwy1",    label: "KIND RWY 1", value: runway1, side: "L", editable: true, cyclable: true },
+    { key: "rwy2",    label: "KIND RWY 2", value: runway2, side: "L", editable: true, cyclable: true },
+    { key: "rwy3",    label: "KIND RWY 3", value: runway3, side: "L", editable: true, cyclable: true },
+    { key: "surface", label: "SURFACE",    value: SURFACE_LABELS[surface] ?? surface, side: "L", editable: true, cyclable: true },
+    { key: "wind",    label: "WIND",       value: String(wind), side: "R", editable: true },
+    { key: "oatqnh",  label: "OAT/QNH",    value: `${oat}/${qnh}`, side: "R", editable: true },
+    { key: "status",  label: "",           value: perfStatus, side: "C", editable: false, small: true, error: perfStatusErr },
+    { key: "return",  label: "",           value: "", side: "C", editable: true, returnLine: true },
+  ] : [];
+
+  // ── ACARS T/O CONDITION 2/2 — FLAP, ANTI-ICE, THRUST, then SEND/DLK/EXEC ──
+  function handleCond2Commit(key, value) {
+    if (key === "flap") {
+      const opts = ["OPT", "1", "2", "4"];
       if (value === null) {
-        const idx = scenarioChoices.indexOf(scenario);
-        setScenario(scenarioChoices[(idx + 1) % scenarioChoices.length]);
+        const idx = opts.indexOf(flapSel);
+        setFlapSel(opts[(idx + 1) % opts.length]);
         return;
       }
-      const mapped = SCENARIO_SHORTHAND[value.toUpperCase()];
-      if (!mapped || !scenarioChoices.includes(mapped)) return { error: "INVALID ENTRY" };
-      setScenario(mapped);
+      const v = value.toUpperCase();
+      if (!opts.includes(v)) return { error: "INVALID ENTRY" };
+      setFlapSel(v);
       return;
     }
     if (key === "antiice") {
       if (value === null) { setAntiIce(a => !a); return; }
       const v = value.toUpperCase();
-      if (v === "ON") setAntiIce(true);
+      if (v === "ALL") setAntiIce(true);
       else if (v === "OFF") setAntiIce(false);
       else return { error: "INVALID ENTRY" };
       return;
     }
-    if (key === "oat")  { setOat(value); return; }
-    if (key === "qnh")  { setQnh(value); return; }
-    if (key === "wind") { setWind(value); return; }
-  }
-
-  const perf1Fields = xmlData ? [
-    { key: "runway",  label: "RUNWAY",   value: runway,                                  side: "L", editable: true, cyclable: true },
-    { key: "intxn",   label: "INTXN",    value: intersection,                            side: "L", editable: true, cyclable: true },
-    { key: "scen",    label: "SCENARIO", value: SCENARIO_LABELS[scenario] ?? scenario,    side: "L", editable: true, cyclable: true },
-    { key: "antiice", label: "ANTI-ICE", value: antiIce ? "ON" : "OFF",                   side: "L", editable: true, cyclable: true },
-    { key: "oat",     label: "OAT C",    value: String(oat),                             side: "R", editable: true },
-    { key: "qnh",     label: "QNH",      value: String(qnh),                             side: "R", editable: true },
-    { key: "wind",    label: "WIND",     value: String(wind),                            side: "R", editable: true },
-    { key: "status",  label: "",         value: perfStatus,                              side: "C", editable: false, small: true, error: perfStatusErr },
-    { key: "return",  label: "",         value: "",                                      side: "C", editable: true, returnLine: true },
-  ] : [];
-
-  // ── PERF TAKEOFF 2/2 — speeds + EXEC ──────────────────────────────────────
-  function handlePerf2Commit(key, value) {
-    if (["v1", "vr", "v2", "flex", "flaps"].includes(key)) {
-      if (value === null) return; // not cyclable
-      setSpeedOverrides(p => ({ ...p, [key]: value }));
-      if (key === "flex" && forceMax) setForceMax(false);
-      return;
-    }
-    if (key === "maxthr") {
-      if (value === null) {
-        setForceMax(f => {
-          const nf = !f;
-          if (nf) setSpeedOverrides(p => { const c = { ...p }; delete c.flex; return c; });
-          return nf;
-        });
-        return;
-      }
+    if (key === "thrust") {
+      if (value === null) { setForceMax(f => !f); return; }
       const v = value.toUpperCase();
-      if (v === "ON") { setForceMax(true); setSpeedOverrides(p => { const c = { ...p }; delete c.flex; return c; }); }
-      else if (v === "OFF") setForceMax(false);
+      if (v === "MAX") setForceMax(true);
+      else if (v === "NORMAL") setForceMax(false);
       else return { error: "INVALID ENTRY" };
       return;
     }
   }
 
-  // V-speed / FLEX / FLAPS overrides only make sense for a single requested
-  // runway — when ALL runways are requested each gets its own computed
-  // speeds, so the override fields are shown read-only (preview of the
-  // first runway's values) instead of editable.
-  const perf2Fields = xmlData ? [
-    { key: "v1",    label: "V1",     value: String(getSpeed("v1")),               side: "L", editable: !allRunwaysSelected },
-    { key: "vr",    label: "VR",     value: String(getSpeed("vr")),               side: "L", editable: !allRunwaysSelected },
-    { key: "v2",    label: "V2",     value: String(getSpeed("v2")),               side: "L", editable: !allRunwaysSelected },
-    { key: "flex",  label: "FLEX",   value: forceMax ? "MAX" : String(getSpeed("flex")), side: "R", editable: !forceMax && !allRunwaysSelected },
-    { key: "flaps", label: "FLAPS",  value: String(getSpeed("flaps")),            side: "R", editable: !allRunwaysSelected },
-    { key: "maxthr",label: "MAX THR",value: forceMax ? "ON" : "OFF",              side: "R", editable: !allRunwaysSelected, cyclable: true },
-    { key: "thr",   label: "THR",    value: allRunwaysSelected ? "ALL RWYS" : (rwyData?.thr ?? ""), side: "C", editable: false },
-    { key: "status",label: "",       value: perfStatus,                          side: "C", editable: false, small: true, error: perfStatusErr },
+  const cond2Fields = xmlData ? [
+    { key: "flap",    label: "FLAP",     value: flapSel,               side: "L", editable: true, cyclable: true },
+    { key: "antiice", label: "ANTI-ICE", value: antiIce ? "ALL" : "OFF", side: "L", editable: true, cyclable: true },
+    { key: "thrust",  label: "THRUST",   value: forceMax ? "MAX" : "NORMAL", side: "L", editable: true, cyclable: true },
+    { key: "status",  label: "",         value: perfStatus, side: "C", editable: false, small: true, error: perfStatusErr },
   ] : [];
 
   async function handleExec() {
-    if (!xmlData || !rwyData) return;
+    const runways = [runway1, runway2, runway3].map(r => r.trim().toUpperCase()).filter(Boolean);
+    if (!xmlData || runways.length === 0) return;
     setGenerating(true);
     setPerfStatus("GENERATING...");
     setPerfStatusErr(false);
@@ -295,13 +267,12 @@ export default function CduApp() {
       const result = await apiGenerateTps({
         xml_data: xmlData,
         mode: "tps",
-        scenario,
+        scenario: surface,
         condOverride: conditionsEdited,
         oat, qnh, wind,
         antiIce,
-        runway,
-        intersection,
-        speedOverrides,
+        runways,
+        speedOverrides: flapSel !== "OPT" ? { flaps: flapSel } : {},
         forceMax,
       });
       setTpsResult(result.tps);
@@ -323,12 +294,11 @@ export default function CduApp() {
   // confirmed field-for-field against a live-generated COMBINED.txt sample:
   // page 1 = loadsheet summary (FLT/RLS/TIME, WIND/OAT/QNH, SECT A/B/C —
   // pax + F/A CGO weight + GTOW/CG + ZFW/CG + FOB + TOT PAX), page 2 =
-  // REMARKS, then ONE TAKEOFF PERFORMANCE page per requested runway (a
-  // single runway normally, or every published runway at once when "ALL"
-  // is selected on PERF TAKEOFF 1/2 — same as the real system's multi-
-  // runway ACARS request, which pages 3/5, 4/5, 5/5... one per runway).
+  // REMARKS, then ONE TAKEOFF PERFORMANCE page per requested runway (up to
+  // 3 — matches the real system's KIND RWY 1/2/3 limit and its "pages 3/5,
+  // 4/5, 5/5 are identical, one per runway request" pagination).
   function handleAcarsCommit(key, value) {
-    if (key === "return" && value === null) setPage("PERF2");
+    if (key === "return" && value === null) setPage("COND2");
   }
 
   const acarsSummaryFields = loadsheetSummary ? [
@@ -427,31 +397,31 @@ export default function CduApp() {
       onFieldCommit: handleIdentCommit,
       execAvailable: !xmlData && !loadingPlan && simbriefUsername.trim().length > 0,
       onExec: () => doFetch(simbriefUsername.trim()),
-      onNext: xmlData ? () => setPage("PERF1") : undefined,
-      onPerf: xmlData ? () => setPage("PERF1") : undefined,
+      onNext: xmlData ? () => setPage("COND1") : undefined,
+      onPerf: xmlData ? () => setPage("COND1") : undefined,
     };
-  } else if (page === "PERF1") {
+  } else if (page === "COND1") {
     cduProps = {
-      title: "PERF TAKEOFF", pageNum: "1/2",
-      fields: perf1Fields,
-      onFieldCommit: handlePerf1Commit,
+      title: "ACARS T/O CONDITION", pageNum: "1/2",
+      fields: cond1Fields,
+      onFieldCommit: handleCond1Commit,
       execAvailable: false,
       onPrev: () => setPage("IDENT"),
-      onNext: () => setPage("PERF2"),
-      onPerf: () => setPage("PERF1"),
+      onNext: () => setPage("COND2"),
+      onPerf: () => setPage("COND1"),
       onFpl: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
     };
-  } else if (page === "PERF2") {
+  } else if (page === "COND2") {
     cduProps = {
-      title: "PERF TAKEOFF", pageNum: "2/2",
-      fields: perf2Fields,
-      onFieldCommit: handlePerf2Commit,
-      execAvailable: !!xmlData && !!rwyData && !generating,
+      title: "ACARS T/O CONDITION", pageNum: "2/2",
+      fields: cond2Fields,
+      onFieldCommit: handleCond2Commit,
+      execAvailable: !!xmlData && [runway1, runway2, runway3].some(r => r.trim()) && !generating,
       onExec: handleExec,
-      onDlk: handleExec, // real workflow: DLK sends the ACARS request, same trigger as EXEC
-      onPrev: () => setPage("PERF1"),
+      onDlk: handleExec, // real workflow: DATALINK SEND* sends the ACARS request, same trigger as EXEC
+      onPrev: () => setPage("COND1"),
       onNext: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
-      onPerf: () => setPage("PERF1"),
+      onPerf: () => setPage("COND1"),
       onFpl: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
     };
   } else if (page === "ACARS") {
@@ -463,13 +433,13 @@ export default function CduApp() {
       execAvailable: false,
       onPrev: () => {
         if (acarsPageIndex > 0) setAcarsPageIndex(i => i - 1);
-        else setPage("PERF2");
+        else setPage("COND2");
       },
       onNext: () => {
         if (acarsPageIndex < ACARS_PAGES.length - 1) setAcarsPageIndex(i => i + 1);
         else { setPrintPageIndex(0); setPage("PRINT"); }
       },
-      onPerf: () => setPage("PERF1"),
+      onPerf: () => setPage("COND1"),
       onFpl: handlePrintDownload,
     };
   } else { // PRINT
@@ -480,7 +450,7 @@ export default function CduApp() {
       execAvailable: false,
       onPrev: handlePrintPrev,
       onNext: handlePrintNext,
-      onPerf: () => setPage("PERF1"),
+      onPerf: () => setPage("COND1"),
       onFpl: handlePrintDownload, // FPL repurposed as PRINT/DOWNLOAD on this page
     };
   }
