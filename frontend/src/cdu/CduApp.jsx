@@ -351,30 +351,42 @@ export default function CduApp() {
     if (key === "return" && value === null) setPage("COND2");
   }
 
+  // Center column is PACKED two-values-per-row (same technique the real
+  // AeroData printout uses) instead of one field per line — with all 6 of
+  // F CGO/GTOW-CG/A CGO/ZFW-CG/FOB/TOT PAX on their own lines the page ran
+  // to ~13 rows and overflowed the fixed-height screen, forcing an internal
+  // scroll that real CDU hardware never does and that desynced the LSK
+  // hit-targets from their labels. Packed + tight brings it to 9 rows.
   const acarsSummaryFields = loadsheetSummary ? [
-    { key: "flt",   label: "FLT",        value: String(loadsheetSummary.flt_no),       side: "L", editable: false },
-    { key: "rls",   label: "RLS",        value: String(loadsheetSummary.rls_no),       side: "L", editable: false },
-    { key: "seca",  label: "SECT A",     value: String(loadsheetSummary.sect_a_pax),   side: "L", editable: false },
-    { key: "secb",  label: "SECT B",     value: String(loadsheetSummary.sect_b_pax),   side: "L", editable: false },
-    { key: "secc",  label: "SECT C",     value: String(loadsheetSummary.sect_c_pax),   side: "L", editable: false },
-    { key: "time",  label: "TIME",       value: String(loadsheetSummary.time),         side: "R", editable: false },
-    { key: "wind",  label: "WIND",       value: String(loadsheetSummary.wind),         side: "R", editable: false },
-    { key: "oat",   label: "OAT C",      value: String(loadsheetSummary.oat),          side: "R", editable: false },
-    { key: "qnh",   label: "QNH",        value: String(loadsheetSummary.qnh),          side: "R", editable: false },
-    { key: "fcgo",  label: "F CGO",      value: String(loadsheetSummary.sect_a_bagwt), side: "C", editable: false },
-    { key: "gtow",  label: "GTOW/CG",    value: String(loadsheetSummary.gtow_cg),      side: "C", editable: false },
-    { key: "acgo",  label: "A CGO",      value: String(loadsheetSummary.sect_b_bagwt), side: "C", editable: false },
-    { key: "zfw",   label: "ZFW/CG",     value: String(loadsheetSummary.zfw_cg),       side: "C", editable: false },
-    { key: "fob",   label: "FOB",        value: String(loadsheetSummary.sect_c_fuel),  side: "C", editable: false },
-    { key: "totpax",label: "TOT PAX",    value: String(loadsheetSummary.ttl_pax),      side: "C", editable: false },
-    { key: "status",label: "",           value: loadsheetSummary.takeoff_data_avail ? "TAKEOFF DATA AVAIL" : "NO TAKEOFF DATA AVAIL", side: "C", editable: false, small: true, error: !loadsheetSummary.takeoff_data_avail },
+    { key: "flt",   label: "FLT",        value: String(loadsheetSummary.flt_no),       side: "L", editable: false, tight: true },
+    { key: "rls",   label: "RLS",        value: String(loadsheetSummary.rls_no),       side: "L", editable: false, tight: true },
+    { key: "seca",  label: "SECT A",     value: String(loadsheetSummary.sect_a_pax),   side: "L", editable: false, tight: true },
+    { key: "secb",  label: "SECT B",     value: String(loadsheetSummary.sect_b_pax),   side: "L", editable: false, tight: true },
+    { key: "secc",  label: "SECT C",     value: String(loadsheetSummary.sect_c_pax),   side: "L", editable: false, tight: true },
+    { key: "time",  label: "TIME",       value: String(loadsheetSummary.time),         side: "R", editable: false, tight: true },
+    { key: "wind",  label: "WIND",       value: String(loadsheetSummary.wind),         side: "R", editable: false, tight: true },
+    { key: "oat",   label: "OAT C",      value: String(loadsheetSummary.oat),          side: "R", editable: false, tight: true },
+    { key: "qnh",   label: "QNH",        value: String(loadsheetSummary.qnh),          side: "R", editable: false, tight: true },
+    { key: "pk1",   side: "C", tight: true, pack: [
+        { label: "F CGO",   value: String(loadsheetSummary.sect_a_bagwt) },
+        { label: "GTOW/CG", value: String(loadsheetSummary.gtow_cg) },
+      ] },
+    { key: "pk2",   side: "C", tight: true, pack: [
+        { label: "A CGO",   value: String(loadsheetSummary.sect_b_bagwt) },
+        { label: "ZFW/CG",  value: String(loadsheetSummary.zfw_cg) },
+      ] },
+    { key: "pk3",   side: "C", tight: true, pack: [
+        { label: "FOB",     value: String(loadsheetSummary.sect_c_fuel) },
+        { label: "TOT PAX", value: String(loadsheetSummary.ttl_pax) },
+      ] },
+    { key: "status",label: "",           value: loadsheetSummary.takeoff_data_avail ? "TAKEOFF DATA AVAIL" : "NO TAKEOFF DATA AVAIL", side: "C", editable: false, small: true, error: !loadsheetSummary.takeoff_data_avail, tight: true },
     { key: "return",label: "",           value: "",                                    side: "C", editable: true, returnLine: true },
   ] : [];
 
   const acarsRemarksFields = loadsheetSummary ? [
-    { key: "hdr", label: "", value: "REMARKS", side: "C", editable: false, small: true },
+    { key: "hdr", label: "", value: "REMARKS", side: "C", editable: false, small: true, tight: true },
     ...(loadsheetSummary.remarks ?? []).map((rl, i) => ({
-      key: `rl${i}`, label: "", value: rl || " ", side: "C", editable: false, small: true,
+      key: `rl${i}`, label: "", value: rl || " ", side: "C", editable: false, small: true, tight: true,
     })),
     { key: "return", label: "", value: "", side: "C", editable: true, returnLine: true },
   ] : [];
@@ -382,20 +394,26 @@ export default function CduApp() {
   // Field set matches a live-generated TAKEOFF PERFORMANCE block exactly:
   // left = FLEX/FLAP/STAB, right = V1/VR/V2/VFS, center = airport+runway+
   // length, MRTW/LIM, MTOW, GTOW/CG, ACCEL. One of these per runway result.
+  // Same packed-row/tight technique as acarsSummaryFields (see comment
+  // above it) — keeps this page from overflowing the fixed-height screen.
   function buildPerfFields(rd) {
     return [
-      { key: "flex",  label: "FLEX",  value: String(rd.flex),  side: "L", editable: false },
-      { key: "flap",  label: "FLAP",  value: String(rd.flaps), side: "L", editable: false },
-      { key: "stab",  label: "STAB",  value: String(rd.trim_stab), side: "L", editable: false },
-      { key: "v1",    label: "V1",    value: String(rd.v1),    side: "R", editable: false },
-      { key: "vr",    label: "VR",    value: String(rd.vr),    side: "R", editable: false },
-      { key: "v2",    label: "V2",    value: String(rd.v2),    side: "R", editable: false },
-      { key: "vfs",   label: String(rd.vfs_label || "VFS"), value: rd.vfs != null ? String(rd.vfs) : "---", side: "R", editable: false },
-      { key: "rwy",   label: "RUNWAY / LENGTH", value: `${rd.airport} ${rd.runway}   ${rd.length}FT`, side: "C", editable: false },
-      { key: "mrtw",  label: "MRTW / LIM", value: String(rd.mrtw), side: "C", editable: false },
-      { key: "mtow",  label: "MTOW",  value: String(rd.mtow), side: "C", editable: false },
-      { key: "gtow",  label: "GTOW / CG", value: String(rd.gtow_cg), side: "C", editable: false },
-      { key: "accel", label: "ACCEL", value: String(rd.acc_alt), side: "C", editable: false },
+      { key: "flex",  label: "FLEX",  value: String(rd.flex),  side: "L", editable: false, tight: true },
+      { key: "flap",  label: "FLAP",  value: String(rd.flaps), side: "L", editable: false, tight: true },
+      { key: "stab",  label: "STAB",  value: String(rd.trim_stab), side: "L", editable: false, tight: true },
+      { key: "v1",    label: "V1",    value: String(rd.v1),    side: "R", editable: false, tight: true },
+      { key: "vr",    label: "VR",    value: String(rd.vr),    side: "R", editable: false, tight: true },
+      { key: "v2",    label: "V2",    value: String(rd.v2),    side: "R", editable: false, tight: true },
+      { key: "vfs",   label: String(rd.vfs_label || "VFS"), value: rd.vfs != null ? String(rd.vfs) : "---", side: "R", editable: false, tight: true },
+      { key: "rwy",   label: "RUNWAY / LENGTH", value: `${rd.airport} ${rd.runway}   ${rd.length}FT`, side: "C", editable: false, tight: true },
+      { key: "pk1",   side: "C", tight: true, pack: [
+          { label: "MRTW/LIM", value: String(rd.mrtw) },
+          { label: "MTOW",     value: String(rd.mtow) },
+        ] },
+      { key: "pk2",   side: "C", tight: true, pack: [
+          { label: "GTOW/CG",  value: String(rd.gtow_cg) },
+          { label: "ACCEL",    value: String(rd.acc_alt) },
+        ] },
       { key: "return",label: "",       value: "",                       side: "C", editable: true, returnLine: true },
     ];
   }

@@ -80,18 +80,36 @@ function validateField(fieldKey, raw) {
 
 // One line-pair: a label line (small, dim) and a data line (large, bright).
 // side: "L" | "R" | "C" (center, no LSK)
-function CduLine({ label, value, side, editable, small, error, cyclable, returnLine, returnLabel }) {
+function CduLine({ label, value, side, editable, small, error, cyclable, returnLine, returnLabel, tight }) {
   const displayValue = returnLine
     ? (returnLabel || "<RETURN>")
     : value
       ? `${cyclable && editable ? "↓" : ""}${value}`
       : (editable ? "----" : " ");
   return (
-    <div className={`cdu-line cdu-line-${side} ${returnLine ? "cdu-line-return-wrap" : ""}`}>
+    <div className={`cdu-line cdu-line-${side} ${tight ? "cdu-line-tight" : ""} ${returnLine ? "cdu-line-return-wrap" : ""}`}>
       {label && <div className="cdu-line-label">{label}</div>}
       <div className={`cdu-line-value ${editable ? "cdu-editable" : ""} ${small ? "cdu-line-small" : ""} ${error ? "cdu-line-error" : ""} ${returnLine ? "cdu-return-line" : ""}`}>
         {displayValue}
       </div>
+    </div>
+  );
+}
+
+// Packed row — two label/value pairs side-by-side on ONE physical text row,
+// the same space-saving technique the real AeroData printout uses (it packs
+// 2-3 values per line rather than one value per line). Center-column-only
+// (no LSK binding), used to keep dense report pages from overflowing the
+// fixed-height screen and forcing a scroll — real CDU hardware never scrolls.
+function CduPackLine({ pack, tight }) {
+  return (
+    <div className={`cdu-line cdu-line-pack ${tight ? "cdu-line-tight" : ""}`}>
+      {pack.map((p, i) => (
+        <div className="cdu-pack-item" key={i}>
+          {p.label && <div className="cdu-line-label">{p.label}</div>}
+          <div className="cdu-line-value">{p.value || " "}</div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -201,20 +219,22 @@ export default function CduEmulator({
 
           <div className="cdu-screen-body">
             <div className="cdu-screen-top">
-              <div className="cdu-col cdu-col-left">
+              <div className={`cdu-col cdu-col-left ${leftFields.length && leftFields.every(f => f.tight) ? "cdu-col-tight" : ""}`}>
                 {leftFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} />
+                  <CduLine key={f.key || i} label={f.label} value={f.value} side="L" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} />
                 ))}
               </div>
-              <div className="cdu-col cdu-col-right">
+              <div className={`cdu-col cdu-col-right ${rightFields.length && rightFields.every(f => f.tight) ? "cdu-col-tight" : ""}`}>
                 {rightFields.map((f, i) => (
-                  <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} />
+                  <CduLine key={f.key || i} label={f.label} value={f.value} side="R" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} />
                 ))}
               </div>
             </div>
-            <div className="cdu-col cdu-col-center">
+            <div className={`cdu-col cdu-col-center ${centerFields.length && centerFields.filter(x => !x.returnLine).every(f => f.tight) ? "cdu-col-tight" : ""}`}>
               {centerFields.map((f, i) => (
-                <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} />
+                f.pack
+                  ? <CduPackLine key={f.key || i} pack={f.pack} tight={f.tight} />
+                  : <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} returnLine={f.returnLine} returnLabel={f.returnLabel} tight={f.tight} />
               ))}
             </div>
           </div>
@@ -325,18 +345,28 @@ const CDU_CSS = `
 .cdu-screen-header { display: flex; align-items: center; justify-content: space-between; color: #eaeaea;
   font-size: 11px; font-weight: 700; letter-spacing: 1px; padding-bottom: 3%; border-bottom: 1px solid #333; flex-shrink: 0; }
 .cdu-page-num { color: #7fd0ff; font-weight: 400; }
-.cdu-screen-body { flex: 1; display: flex; flex-direction: column; padding-top: 3%; overflow-y: auto; min-height: 0; }
+.cdu-screen-body { flex: 1; display: flex; flex-direction: column; padding-top: 3%; overflow: hidden; min-height: 0; }
 .cdu-screen-top { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; flex-shrink: 0; }
 .cdu-col { display: flex; flex-direction: column; gap: 4px; }
+.cdu-col-tight { gap: 1px; }
 .cdu-col-center { padding-top: 6px; }
+.cdu-col-center.cdu-col-tight { padding-top: 2px; }
 .cdu-line-return-wrap { margin-top: 10px; }
 
 .cdu-line { display: flex; flex-direction: column; justify-content: center; min-height: 22px; line-height: 1.1; }
+.cdu-line-tight { min-height: 13px; line-height: 1; }
+.cdu-line-tight .cdu-line-label { font-size: 7.5px; }
+.cdu-line-tight .cdu-line-value { font-size: 10px; }
 .cdu-line-label { color: #7fd0ff; font-size: 8.5px; letter-spacing: 0.4px; }
 .cdu-line-value { color: #f2f2f2; font-size: 12px; font-weight: 600; min-height: 13px; }
 .cdu-line-value.cdu-line-small { font-size: 10px; font-weight: 400; }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
+.cdu-line-pack { display: flex; flex-direction: row; min-height: 22px; line-height: 1.1; }
+.cdu-line-pack.cdu-line-tight { min-height: 13px; line-height: 1; }
+.cdu-pack-item { flex: 1; text-align: center; }
+.cdu-line-pack.cdu-line-tight .cdu-pack-item .cdu-line-label { font-size: 7.5px; }
+.cdu-line-pack.cdu-line-tight .cdu-pack-item .cdu-line-value { font-size: 10px; }
 .cdu-editable { color: #7fff9e; }
 .cdu-line-error { color: #ff5c4d; }
 .cdu-return-line { color: #f2f2f2; }
