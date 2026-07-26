@@ -320,7 +320,9 @@ export default function CduEmulator({
                 {looseCenter.map((f, i) => (
                   f.pack
                     ? <CduPackLine key={f.key || i} pack={f.pack} tight={f.tight} />
-                    : <CduLine key={f.key || i} label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} tight={f.tight} dim={f.dim} tone={f.tone} />
+                    : <div key={f.key || i} className={f.wide ? "cdu-wide" : ""}>
+                        <CduLine label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} tight={f.tight} dim={f.dim} tone={f.tone} />
+                      </div>
                 ))}
               </div>
             )}
@@ -471,6 +473,9 @@ const CDU_CSS = `
   flex: 1 1 0; min-height: 0; column-gap: 1%; }
 .cdu-cell { min-width: 0; overflow: hidden; }
 .cdu-loose { display: flex; flex-direction: column; align-items: stretch; flex-shrink: 0; }
+/* Full-width free text (REMARKS, SPECIAL/EFP) — left aligned and allowed to
+   use the whole screen width instead of being boxed into one grid column. */
+.cdu-wide .cdu-line-value, .cdu-wide .cdu-line-label { text-align: left; white-space: pre-wrap; }
 
 .cdu-line { display: flex; flex-direction: column; justify-content: center; line-height: 1.05; }
 .cdu-line-tight { line-height: 1; }

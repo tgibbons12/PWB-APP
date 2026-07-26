@@ -198,6 +198,10 @@ export default function CduApp() {
   // second carries it out. Anything else navigating away disarms it.
   function resetAll() {
     setXmlData(null);
+    // Wipe the SimBrief ID too, including the persisted copy — otherwise a
+    // "reset" unit still comes up pre-filled with the last crew's username.
+    setSimbriefUsername("");
+    try { localStorage.removeItem("tps_simbrief_username"); } catch { /* private mode */ }
     setRunway1(""); setRunway2(""); setRunway3("");
     setSurface("PLANNED");
     setOat(""); setQnh(""); setWind(""); setPtow(""); setRelVersion("");
@@ -325,6 +329,25 @@ export default function CduApp() {
       setAcarsPageIndex(0); setPage("ACARS");
       return;
     }
+    if (key === "datareq") {
+      if (!xmlData) return { error: "NO FLIGHT PLAN" };
+      // Pull the OFP's planned figures into the blank fields as a preview.
+      // Section split mirrors the backend's own (25% fwd / 75% aft); cargo is
+      // split 50/50 because the OFP only carries a single total. Everything
+      // stays editable — this is a starting point, not a commitment.
+      const paxTotal = Number(xmlData.pax_count_xml) || 0;
+      const cargoTotal = Number(xmlData.cargo_xml) || 0;
+      const fwdPax = Math.round(paxTotal * 0.25);
+      setAdChA(`${fwdPax}/0`);
+      setAdChB(`${paxTotal - fwdPax}/0`);
+      setAdChC("0/0");
+      setBagFwd(`0/${Math.round(cargoTotal / 2)}`);
+      setBagAft(`0/${cargoTotal - Math.round(cargoTotal / 2)}`);
+      setFaAcm("0/1/1");
+      setCloset("65");
+      setToFuel(String(xmlData.plan_ramp_xml ?? ""));
+      return { error: "OFP DATA LOADED" };
+    }
     const setters = {
       adcha: setAdChA, adchb: setAdChB, adchc: setAdChC,
       bagfwd: setBagFwd, bagaft: setBagAft,
@@ -336,6 +359,10 @@ export default function CduApp() {
     setter(value === DELETE_TOKEN ? "" : value);
   }
 
+  // Layout and wording taken from the real E175 loadsheet page: AD/CH A/B/C
+  // amber (mandatory), BAG/WT FWD/AFT cyan, and on the right ACM/FFA/AFA TTL,
+  // PAX CLOSET, T/O FUEL, BLST FUEL, T/O DATA>, SEND. TTL PAX is a computed
+  // green readout in the middle column, not an entry.
   const loadsheetFields = [
     { key: "adcha",   label: "AD/CH A",      value: adChA,   side: "L", editable: true, tone: "amber" },
     { key: "adchb",   label: "AD/CH B",      value: adChB,   side: "L", editable: true, tone: "amber" },
@@ -343,15 +370,16 @@ export default function CduApp() {
     { key: "bagfwd",  label: "BAG/WT FWD",   value: bagFwd,  side: "L", editable: true, tone: "cyan" },
     { key: "bagaft",  label: "BAG/WT AFT",   value: bagAft,  side: "L", editable: true, tone: "cyan" },
     { key: "perfwb",  label: "",             value: "<PERF/W&B", side: "L", editable: true, selectable: true, tone: "white" },
-    { key: "faacm",   label: "TTL FA/ACM",   value: faAcm,   side: "R", editable: true, tone: "cyan" },
+    { key: "faacm",   label: "ACM/FFA/AFA",  value: faAcm,   side: "R", editable: true, tone: "cyan" },
     { key: "closet",  label: "CLOSET",       value: closet,  side: "R", editable: true, tone: "cyan" },
-    { key: "tofuel",  label: "T/O FUEL",     value: toFuel,  side: "R", editable: true, tone: "cyan" },
+    { key: "tofuel",  label: "T/O FUEL",     value: toFuel,  side: "R", editable: true, tone: "amber" },
     { key: "blstfuel",label: "BLST FUEL",    value: blstFuel,side: "R", editable: true, tone: "cyan" },
     { key: "torwydata", label: "T/O",        value: "DATA>", side: "R", editable: true, selectable: true, tone: "white" },
-    { key: "send",      label: "DATALINK",   value: "SEND*", side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "send",      label: "",           value: "SEND",  side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "datareq", label: "", value: "DATA REQ*", side: "C", row: 0, editable: true, selectable: true, tone: "white" },
     { key: "ttlpax",  label: "TTL PAX",
       value: String(sumPair(adChA) + sumPair(adChB) + sumPair(adChC)),
-      side: "C", row: 0, editable: false, tone: "green" },
+      side: "C", row: 1, editable: false, tone: "green" },
   ];
 
   // ── ACARS PAX DETAIL — LOADSHEET page 2/2 (POH p.9-75) ─────────────────────
@@ -424,23 +452,12 @@ export default function CduApp() {
       setTpsResult(null);
       setPrintPageIndex(0);
 
-      // Pre-fill the ACARS LOADSHEET from the OFP so it's immediately usable.
-      // Section split mirrors the backend's own (25% fwd / 75% aft), and the
-      // cargo split is 50/50 since the OFP only gives a single total.
-      const paxTotal = Number(data.pax_count_xml) || 0;
-      const cargoTotal = Number(data.cargo_xml) || 0;
-      const fwdPax = Math.round(paxTotal * 0.25);
-      setAdChA(`${fwdPax}/0`);
-      setAdChB(`${paxTotal - fwdPax}/0`);
-      setAdChC("0/0");
-      setBagFwd(`0/${Math.round(cargoTotal / 2)}`);
-      setBagAft(`0/${cargoTotal - Math.round(cargoTotal / 2)}`);
-      setFaAcm("2/0");
-      setCloset("65");
-      setToFuel(String(data.plan_ramp_xml ?? ""));
-      setBlstFuel("");
-
-      setIdentStatus(`OFP LOADED — FLT ${data.flight_number} ${data.origin_iata}-${data.dest_iata}`);
+      // Deliberately NOT pre-filled. The real unit comes up with every entry
+      // field blank (dashes) and the crew fills them in; auto-populating them
+      // hides what has actually been entered vs. assumed. The OFP figures are
+      // available on demand via DATA REQ* (see requestOfpData), which loads
+      // them into the fields as a preview the crew can then edit.
+      setIdentStatus(`OFP LOADED - FLT ${data.flight_number} ${data.origin_iata}-${data.dest_iata}`);
       setIdentStatusErr(false);
       setPage("PERFWB");
     } catch (e) {
@@ -551,8 +568,9 @@ export default function CduApp() {
     if (key === "send") {
       if (![runway1, runway2, runway3].some(r => r.trim())) return { error: "ENTER RUNWAY 1" };
       // AeroData won't compute against a stale release — block the send.
-      if (!relVersion) return { error: "ENTER REL VERSION" };
-      if (!relOk) return { error: `REL MISMATCH - OFP ${ofpRelease}` };
+      // RLS VERSION is entered on page 2/2.
+      if (!relVersion) return { error: "ENTER RLS VERSION 2/2" };
+      if (!relOk) return { error: `RLS MISMATCH - OFP ${ofpRelease}` };
       handleExec();
       return;
     }
@@ -564,11 +582,15 @@ export default function CduApp() {
       setPtow(value);
       return;
     }
-    if (key === "relversion") {
-      if (value === DELETE_TOKEN) { setRelVersion(""); return; }
-      setRelVersion(value);
-      if (value !== String(ofpRelease)) return { error: `REL MISMATCH - OFP ${ofpRelease}` };
-      return;
+    if (key === "datareq") {
+      if (!xmlData) return { error: "NO FLIGHT PLAN" };
+      // Loads the OFP's planned conditions into the blank fields as a
+      // preview; all of it stays editable.
+      setOat(xmlData.temp ?? ""); setQnh(xmlData.qnh ?? "");
+      setWind(xmlData.wind ?? "");
+      setPtow(xmlData.est_tow_xml ? (Number(xmlData.est_tow_xml) / 1000).toFixed(1) : "");
+      if (!runway1 && xmlData.plan_rwy && runwayIds.includes(xmlData.plan_rwy)) setRunway1(xmlData.plan_rwy);
+      return { error: "OFP DATA LOADED" };
     }
     if (key === "oatqnh") {
       if (value === DELETE_TOKEN) return { error: "NOT ALLOWED" }; // required field
@@ -597,17 +619,18 @@ export default function CduApp() {
     { key: "surface",  label: "SURFACE",   value: SURFACE_LABELS[surface] ?? surface, side: "L", editable: true, cyclable: true, tone: "cyan" },
     { key: "level",    label: "LEVEL",     value: "---",           side: "L", dim: true, dimLabel: "CONTAM LEVEL" },
     { key: "return",   label: "",          value: "<PERF/W&B",     side: "L", editable: true, selectable: true, tone: "white" },
-    { key: "wind",       label: "WIND",        value: String(wind),    side: "R", editable: true, tone: "amber" },
-    { key: "oatqnh",     label: "OAT C/QNH",   value: `${oat}/${qnh}`, side: "R", editable: true, tone: "amber" },
-    { key: "ptow",       label: "PTOW",        value: ptow,            side: "R", editable: true, tone: "cyan" },
-    { key: "relversion", label: "REL VERSION", value: relVersion,      side: "R", editable: true,
-      tone: relVersion && relVersion !== String(ofpRelease) ? undefined : "amber",
-      error: !!relVersion && relVersion !== String(ofpRelease) },
-    { key: "gotols",     label: "W&B",         value: "LOADSHEET>",    side: "R", editable: true, selectable: true, tone: "white" },
-    { key: "send",       label: "DATALINK",    value: "SEND*",         side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "wind",     label: "WIND",     value: String(wind),      side: "R", editable: true, tone: "cyan" },
+    { key: "oatqnh",   label: "OAT/QNH",  value: oat || qnh ? `${oat}/${qnh}` : "", side: "R", editable: true, tone: "cyan" },
+    { key: "ptow",     label: "PTOW",     value: ptow,              side: "R", editable: true, tone: "cyan" },
+    { key: "gotols",   label: "W&B",      value: "LOADSHEET>",      side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "gotodata", label: "T/O",      value: "DATA>",           side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "send",     label: "",         value: "SEND",            side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "datareq",  label: "",         value: "DATA REQ*",       side: "C", row: 0, editable: true, selectable: true, tone: "white" },
   ] : [];
 
-  // ── ACARS TO CONDITIONS 2/2 — ANTI-ICE, FLAPS, THRUST, LLWS ADVISORY ───────
+  // ── ACARS T/O CONDITION 2/2 — FLAP, ANTI-ICE, THRUST, RLS VERSION ─────────
+  // Layout taken from a real E175 screen photo. LLWS ADVISORY is NOT on this
+  // page (it was a guess and has been dropped); RLS VERSION sits at 4L.
   // Exact field order and wording confirmed against real E-Jet cockpit
   // footage: ANTI-ICE first (not last), "FLAPS" (plural) not "FLAP",
   // "OPTIMUM" (not the abbreviation "OPT"/"NORMAL"), and a fourth field —
@@ -619,6 +642,13 @@ export default function CduApp() {
   // (same as what a fresh flight-plan load starts with) — real CDU convention
   // for a field that can't just go blank.
   function handleCond2Commit(key, value) {
+    if (key === "perfwb") { setPage("PERFWB"); return; }
+    if (key === "relversion") {
+      if (value === DELETE_TOKEN) { setRelVersion(""); return; }
+      setRelVersion(value);
+      if (value !== String(ofpRelease)) return { error: `RLS MISMATCH - OFP ${ofpRelease}` };
+      return;
+    }
     if (key === "flaps") {
       const opts = ["OPTIMUM", "1", "2", "4"];
       if (value === null) {
@@ -628,6 +658,7 @@ export default function CduApp() {
       }
       if (value === DELETE_TOKEN) { setFlapSel("OPTIMUM"); return; }
       const v = value.toUpperCase();
+      if (v === "OPT") { setFlapSel("OPTIMUM"); return; } // screen shows OPT
       if (!opts.includes(v)) return { error: "INVALID ENTRY" };
       setFlapSel(v);
       return;
@@ -636,8 +667,9 @@ export default function CduApp() {
       if (value === null) { setAntiIce(a => !a); return; }
       if (value === DELETE_TOKEN) { setAntiIce(false); return; }
       const v = value.toUpperCase();
-      if (v === "ON") setAntiIce(true);
-      else if (v === "AUTO") setAntiIce(false);
+      // Real page reads ALL (not ON) when anti-ice is selected.
+      if (v === "ALL" || v === "ON") setAntiIce(true);
+      else if (v === "AUTO" || v === "OFF") setAntiIce(false);
       else return { error: "INVALID ENTRY" };
       return;
     }
@@ -646,7 +678,7 @@ export default function CduApp() {
       if (value === DELETE_TOKEN) { setForceMax(false); return; }
       const v = value.toUpperCase();
       if (v === "MAX") setForceMax(true);
-      else if (v === "OPTIMUM") setForceMax(false);
+      else if (v === "NORMAL" || v === "OPTIMUM") setForceMax(false);
       else return { error: "INVALID ENTRY" };
       return;
     }
@@ -661,11 +693,18 @@ export default function CduApp() {
     }
   }
 
+  // Real E175 page 2/2: FLAP / ANTI-ICE / THRUST / RLS VERSION down the left,
+  // <PERF/W&B at 6L, nothing on the right. Note FLAP is singular and its
+  // default reads OPT, THRUST reads NORMAL (not "OPTIMUM"), and RLS VERSION
+  // lives HERE at 4L — not on page 1/2 where it used to be.
   const cond2Fields = xmlData ? [
-    { key: "antiice", label: "ANTI-ICE",     value: antiIce ? "ON" : "AUTO", side: "L", editable: true, cyclable: true },
-    { key: "flaps",   label: "FLAPS",        value: flapSel,                 side: "L", editable: true, cyclable: true },
-    { key: "thrust",  label: "THRUST",       value: forceMax ? "MAX" : "OPTIMUM", side: "L", editable: true, cyclable: true },
-    { key: "llws",    label: "LLWS ADVISORY",value: llwsAdvisory ? "YES" : "NO", side: "L", editable: true, cyclable: true },
+    { key: "flaps",   label: "FLAP",     value: flapSel === "OPTIMUM" ? "OPT" : flapSel, side: "L", editable: true, cyclable: true, tone: "cyan" },
+    { key: "antiice", label: "ANTI-ICE", value: antiIce ? "ALL" : "AUTO", side: "L", editable: true, cyclable: true, tone: "cyan" },
+    { key: "thrust",  label: "THRUST",   value: forceMax ? "MAX" : "NORMAL", side: "L", editable: true, cyclable: true, tone: "cyan" },
+    { key: "relversion", label: "RLS VERSION", value: relVersion, side: "L", editable: true,
+      tone: relVersion && !relOk ? undefined : "cyan", error: !!relVersion && !relOk },
+    { key: "_c2pad",  label: "",         value: "",              side: "L", editable: false },
+    { key: "perfwb",  label: "",         value: "<PERF/W&B",     side: "L", editable: true, selectable: true, tone: "white" },
   ] : [];
 
   async function handleExec() {
@@ -763,9 +802,11 @@ export default function CduApp() {
   const acarsRemarksFields = loadsheetSummary ? (() => {
     const lines = (loadsheetSummary.remarks ?? []).filter(rl => String(rl).trim());
     return [
-      { key: "hdr", label: "REMARKS", value: lines[0] || " ", side: "L", editable: false, tone: "green" },
-      ...lines.slice(1, 6).map((rl, i) => ({
-        key: `rl${i}`, label: "", value: rl, side: "L", editable: false, tone: "green",
+      { key: "hdr", label: "REMARKS", value: " ", side: "L", editable: false, tone: "green" },
+      // Full-width centre lines — remark text is longer than a third of the
+      // screen and was being clipped in the left column.
+      ...lines.slice(0, 8).map((rl, i) => ({
+        key: `rl${i}`, label: "", value: rl, side: "C", editable: false, tone: "green", small: true, wide: true,
       })),
     ];
   })() : [];
@@ -785,12 +826,15 @@ export default function CduApp() {
     if (line) out.push(line);
     return out;
   }
+  // Rendered as unrowed centre fields so each line spans the FULL screen
+  // width. Putting them in the left column truncated them to a third of the
+  // width, which is what was clipping the text.
   const acarsEfpFields = efpText ? (() => {
-    const lines = wrapText(efpText, 24);
+    const lines = wrapText(efpText, 26);
     return [
-      { key: "efphdr", label: "SPECIAL", value: lines[0] || " ", side: "L", editable: false, tone: "green" },
-      ...lines.slice(1, 6).map((l, i) => ({
-        key: `efp${i}`, label: "", value: l, side: "L", editable: false, tone: "green",
+      { key: "efphdr", label: "SPECIAL", value: " ", side: "L", editable: false, tone: "green" },
+      ...lines.slice(0, 8).map((l, i) => ({
+        key: `efp${i}`, label: "", value: l, side: "C", editable: false, tone: "green", small: true, wide: true,
       })),
     ];
   })() : [];
@@ -922,7 +966,7 @@ export default function CduApp() {
     };
   } else if (page === "COND1") {
     cduProps = {
-      title: "ACARS TO CONDITIONS", pageNum: "1/2",
+      title: "ACARS T/O CONDITION", pageNum: "1/2",
       fields: cond1Fields,
       onFieldCommit: handleCond1Commit,
       execAvailable: false,
@@ -934,12 +978,13 @@ export default function CduApp() {
     };
   } else if (page === "COND2") {
     cduProps = {
-      title: "ACARS TO CONDITIONS", pageNum: "2/2",
+      title: "ACARS T/O CONDITION", pageNum: "2/2",
       fields: cond2Fields,
       onFieldCommit: handleCond2Commit,
       // No EXEC key on this unit and no send key on the real 2/2 page — the
-      // request goes out from DATALINK SEND* (LSK 6R) on page 1/2.
+      // request goes out from SEND (LSK 6R) on page 1/2.
       execAvailable: false,
+      message: perfStatus ? { text: perfStatus, error: perfStatusErr } : undefined,
       onPrev: () => setPage("COND1"),
       onNext: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
       onPerf: () => setPage("PERFWB"),

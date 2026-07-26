@@ -2255,12 +2255,27 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
             tr_alt       = rwy.get('tr', acc_alt)
             eo_alt       = rwy.get('eo_acc', acc_alt)
 
+            # VFS / final-segment speed. The runway dict doesn't carry this —
+            # the printed report derives it from SPEEDOTHER keyed on aircraft
+            # type and takeoff weight (see the ERJ branch in the TPS writer),
+            # so do exactly the same here. Falling back to rwy keys alone left
+            # this permanently blank on the CDU.
             if base_type == 'DH8D':
-                v_label   = 'VCL'
-                v_val_raw = rwy.get('v_other') or rwy.get('vfs') or 'XXX'
+                v_label = 'VCL'
             else:
-                v_label   = rwy.get('v_other_id', 'VFS')
-                v_val_raw = rwy.get('v_other') or rwy.get('vfs') or 'XXX'
+                v_label = rwy.get('v_other_id', 'VFS')
+            v_val_raw = rwy.get('v_other') or rwy.get('vfs') or 'XXX'
+            if v_val_raw in ('XXX', 'None', None, ''):
+                try:
+                    from SPEEDOTHER import get_speed_other as _gso_cdu
+                    _so = _gso_cdu(_icaocode, weight=float(loadsheet_data.get('TOW', 0)))
+                    if _so:
+                        if _so.get('speed') is not None:
+                            v_val_raw = _so['speed']
+                        if _so.get('name'):
+                            v_label = _so['name']
+                except Exception:
+                    pass
             try:
                 v_val = int(float(v_val_raw)) if v_val_raw not in ['XXX', 'None', None, ''] else None
             except (TypeError, ValueError):
