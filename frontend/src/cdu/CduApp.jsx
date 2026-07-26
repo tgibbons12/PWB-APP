@@ -120,8 +120,15 @@ export default function CduApp() {
   const [oat, setOat] = useState("");
   const [qnh, setQnh] = useState("");
   const [wind, setWind] = useState("");
-  // No GUST / REL VERSION state any more — the real page has neither (POH
-  // p.9-71: gust is typed into WIND itself, and only for a tailwind).
+  // No GUST field — the real page has none (POH p.9-71: gust is typed into
+  // WIND itself, and only for a tailwind).
+  //
+  // REL VERSION is the dispatch release number the crew reads off the paper
+  // release. AeroData refuses to compute against a stale release, so this is
+  // checked against the release in the SimBrief OFP (xml_data.RLS) and a
+  // mismatch blocks the send rather than silently producing numbers for the
+  // wrong plan.
+  const [relVersion, setRelVersion] = useState("");
   const [ptow, setPtow] = useState(""); // cosmetic only — real system discards this once real loadsheet data exists, which ours always has
 
   // ACARS TO CONDITIONS 2/2 — ANTI-ICE, FLAPS, THRUST, LLWS ADVISORY
@@ -163,6 +170,10 @@ export default function CduApp() {
   // SECT A/B/C, GTOW/CG, ZFW/CG, FOB, TOT PAX, REMARKS) — field names and
   // groupings confirmed against a live-generated COMBINED.txt sample.
   const loadsheetSummary = tpsResult?.loadsheet_summary ?? null;
+  // Dispatch release number straight off the SimBrief OFP — REL VERSION on
+  // the conditions page must match this before anything can be sent.
+  const ofpRelease = xmlData?.RLS ?? "";
+  const relOk = !!relVersion && relVersion === String(ofpRelease);
 
   // ── MENU page — the app's starting page, matches the real Honeywell/
   // WebFMC top-level MENU screen exactly: ◂MISC and ◂BKUP RADIO on the
@@ -264,6 +275,13 @@ export default function CduApp() {
 
   function handleLoadsheetCommit(key, value) {
     if (key === "perfwb") { setPage("PERFWB"); return; }
+    if (key === "send") {
+      if (![runway1, runway2, runway3].some(r => r.trim())) return { error: "ENTER RUNWAY 1" };
+      if (!relVersion) return { error: "ENTER REL VERSION" };
+      if (!relOk) return { error: `REL MISMATCH - OFP ${ofpRelease}` };
+      handleExec();
+      return;
+    }
     if (key === "torwydata") {
       if (!tpsResult) return { error: "NO TAKEOFF DATA AVAIL" };
       setAcarsPageIndex(0); setPage("ACARS");
@@ -292,6 +310,7 @@ export default function CduApp() {
     { key: "tofuel",  label: "T/O FUEL",     value: toFuel,  side: "R", editable: true, tone: "cyan" },
     { key: "blstfuel",label: "BLST FUEL",    value: blstFuel,side: "R", editable: true, tone: "cyan" },
     { key: "torwydata", label: "T/O",        value: "DATA>", side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "send",      label: "DATALINK",   value: "SEND*", side: "R", editable: true, selectable: true, tone: "white" },
     { key: "ttlpax",  label: "TTL PAX",
       value: String(sumPair(adChA) + sumPair(adChB) + sumPair(adChC)),
       side: "C", editable: false, tone: "green", small: true },
@@ -322,7 +341,11 @@ export default function CduApp() {
       setOat(data.temp);
       setQnh(data.qnh);
       setWind(data.wind);
-      setPtow("");
+      setRelVersion("");
+      // PTOW is a real planned takeoff weight, entered in thousands of pounds
+      // with one decimal — POH p.9-71: "76.4 for 76,400 pounds". Seed it from
+      // the OFP's estimated TOW so it's a usable figure rather than blank.
+      setPtow(data.est_tow_xml ? (Number(data.est_tow_xml) / 1000).toFixed(1) : "");
       setTpsResult(null);
       setPrintPageIndex(0);
 
@@ -381,6 +404,12 @@ export default function CduApp() {
       return;
     }
     if (key === "return") { setPage("ACARSMENU"); return; }
+    if (key === "autoinit") {
+      const u = simbriefUsername.trim();
+      if (!u) return { error: "ENTER SIMBRIEF ID" };
+      doFetch(u);
+      return;
+    }
   }
 
   const identFields = [
@@ -393,6 +422,9 @@ export default function CduApp() {
       { key: "ac",   label: "A/C",    value: xmlData.icaocode, side: "R", editable: false, tone: "green" },
     ] : []),
     { key: "return", label: "", value: "", side: "L", editable: true, returnLine: true },
+    // POH p.9-62 LSK 6R: DATALINK AUTO INIT* — fetches the flight data. This
+    // is how the OFP is pulled now that there's no EXEC key on the chassis.
+    { key: "autoinit", label: "DATALINK", value: "AUTO INIT*", side: "R", editable: true, selectable: true, tone: "white" },
     { key: "status", label: "", value: identStatus, side: "C", editable: false, small: true, error: identStatusErr },
   ];
 
@@ -445,11 +477,26 @@ export default function CduApp() {
     }
     if (key === "send") {
       if (![runway1, runway2, runway3].some(r => r.trim())) return { error: "ENTER RUNWAY 1" };
+      // AeroData won't compute against a stale release — block the send.
+      if (!relVersion) return { error: "ENTER REL VERSION" };
+      if (!relOk) return { error: `REL MISMATCH - OFP ${ofpRelease}` };
       handleExec();
       return;
     }
     if (key === "wind")  { setWind(value === DELETE_TOKEN ? "" : value); return; }
-    if (key === "ptow")  { setPtow(value === DELETE_TOKEN ? "" : value); return; }
+    if (key === "ptow") {
+      if (value === DELETE_TOKEN) { setPtow(""); return; }
+      // Thousands of pounds, one decimal (POH p.9-71: "76.4" = 76,400 lb).
+      if (!/^\d{1,3}(\.\d)?$/.test(value)) return { error: "INVALID ENTRY" };
+      setPtow(value);
+      return;
+    }
+    if (key === "relversion") {
+      if (value === DELETE_TOKEN) { setRelVersion(""); return; }
+      setRelVersion(value);
+      if (value !== String(ofpRelease)) return { error: `REL MISMATCH - OFP ${ofpRelease}` };
+      return;
+    }
     if (key === "oatqnh") {
       if (value === DELETE_TOKEN) return { error: "NOT ALLOWED" }; // required field
       const [o, q] = value.split("/");
@@ -477,12 +524,14 @@ export default function CduApp() {
     { key: "surface",  label: "SURFACE",   value: SURFACE_LABELS[surface] ?? surface, side: "L", editable: true, cyclable: true, tone: "cyan" },
     { key: "level",    label: "LEVEL",     value: "---",           side: "L", dim: true, dimLabel: "CONTAM LEVEL" },
     { key: "return",   label: "",          value: "",              side: "L", editable: true, returnLine: true, returnLabel: "<PERF/W&B" },
-    { key: "wind",     label: "WIND",      value: String(wind),    side: "R", editable: true, tone: "amber" },
-    { key: "oatqnh",   label: "OAT C/QNH", value: `${oat}/${qnh}`, side: "R", editable: true, tone: "amber" },
-    { key: "ptow",     label: "PTOW",      value: ptow,            side: "R", editable: true, tone: "cyan" },
-    { key: "gotols",   label: "W&B",       value: "LOADSHEET>",    side: "R", editable: true, selectable: true, tone: "white" },
-    { key: "gotodata", label: "T/O",       value: "DATA>",         side: "R", editable: true, selectable: true, tone: "white" },
-    { key: "send",     label: "DATALINK",  value: "SEND*",         side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "wind",       label: "WIND",        value: String(wind),    side: "R", editable: true, tone: "amber" },
+    { key: "oatqnh",     label: "OAT C/QNH",   value: `${oat}/${qnh}`, side: "R", editable: true, tone: "amber" },
+    { key: "ptow",       label: "PTOW",        value: ptow,            side: "R", editable: true, tone: "cyan" },
+    { key: "relversion", label: "REL VERSION", value: relVersion,      side: "R", editable: true,
+      tone: relVersion && relVersion !== String(ofpRelease) ? undefined : "amber",
+      error: !!relVersion && relVersion !== String(ofpRelease) },
+    { key: "gotols",     label: "W&B",         value: "LOADSHEET>",    side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "send",       label: "DATALINK",    value: "SEND*",         side: "R", editable: true, selectable: true, tone: "white" },
     { key: "status",   label: "",          value: perfStatus, side: "C", editable: false, small: true, error: perfStatusErr },
   ] : [];
 
@@ -635,13 +684,24 @@ export default function CduApp() {
     { key: "status",label: "",         value: loadsheetSummary.takeoff_data_avail ? "TAKEOFF DATA AVAIL" : "NO TAKEOFF DATA AVAIL", side: "C", row: 5, editable: false, small: true, error: !loadsheetSummary.takeoff_data_avail, tone: "green" },
   ] : [];
 
-  const acarsRemarksFields = loadsheetSummary ? [
-    { key: "hdr", label: "", value: "REMARKS", side: "C", editable: false, small: true, tight: true },
-    ...(loadsheetSummary.remarks ?? []).map((rl, i) => ({
-      key: `rl${i}`, label: "", value: rl || " ", side: "C", editable: false, small: true, tight: true,
-    })),
-    { key: "return", label: "", value: "", side: "C", editable: true, returnLine: true },
-  ] : [];
+  // REMARKS page (POH p.9-77): a "REMARKS" heading in label colour with the
+  // remark lines beneath it in AeroData green — not an undifferentiated wall
+  // of plain text. Lines are laid onto the grid's left column so they sit on
+  // their own rows and stay pinned to the LSKs, with <RETURN at 6L.
+  const acarsRemarksFields = loadsheetSummary ? (() => {
+    const lines = (loadsheetSummary.remarks ?? []).filter(rl => String(rl).trim());
+    return [
+      { key: "hdr", label: "REMARKS", value: lines[0] || " ", side: "L", editable: false, tone: "green" },
+      ...lines.slice(1, 5).map((rl, i) => ({
+        key: `rl${i}`, label: "", value: rl, side: "L", editable: false, tone: "green",
+      })),
+      // Pad so <RETURN always lands on 6L like the real page.
+      ...Array.from({ length: Math.max(0, 5 - Math.max(1, lines.length)) }, (_, i) => ({
+        key: `pad${i}`, label: "", value: " ", side: "L", editable: false,
+      })),
+      { key: "return", label: "", value: "", side: "L", editable: true, returnLine: true },
+    ];
+  })() : [];
 
   // Field set matches a live-generated TAKEOFF PERFORMANCE block exactly:
   // left = FLEX/FLAP/STAB, right = V1/VR/V2/VFS, center = airport+runway+
@@ -737,9 +797,7 @@ export default function CduApp() {
       title: "ACARS   LOADSHEET", pageNum: "1/2",
       fields: loadsheetFields,
       onFieldCommit: handleLoadsheetCommit,
-      execAvailable: !!xmlData && [runway1, runway2, runway3].some(r => r.trim()) && !generating,
-      onExec: handleExec,
-      onDlk: handleExec, // 6R DATALINK SEND* on the real page
+      execAvailable: false, // no EXEC key on this unit — send is LSK 6R SEND*
       onPrev: () => setPage("PERFWB"),
       onNext: () => setPage("COND1"),
       onPerf: () => setPage("PERFWB"),
@@ -749,8 +807,7 @@ export default function CduApp() {
       title: "ACARS   INITIALIZE", pageNum: "1/1",
       fields: identFields,
       onFieldCommit: handleIdentCommit,
-      execAvailable: !xmlData && !loadingPlan && simbriefUsername.trim().length > 0,
-      onExec: () => doFetch(simbriefUsername.trim()),
+      execAvailable: false, // no EXEC key — fetch is LSK 6R AUTO INIT*
       onPrev: () => setPage("ACARSMENU"),
       onNext: xmlData ? () => setPage("PERFWB") : undefined,
       onPerf: xmlData ? () => setPage("PERFWB") : undefined,
@@ -771,9 +828,9 @@ export default function CduApp() {
       title: "ACARS TO CONDITIONS", pageNum: "2/2",
       fields: cond2Fields,
       onFieldCommit: handleCond2Commit,
-      execAvailable: !!xmlData && [runway1, runway2, runway3].some(r => r.trim()) && !generating,
-      onExec: handleExec,
-      onDlk: handleExec, // real workflow: DATALINK SEND* sends the ACARS request, same trigger as EXEC
+      // No EXEC key on this unit and no send key on the real 2/2 page — the
+      // request goes out from DATALINK SEND* (LSK 6R) on page 1/2.
+      execAvailable: false,
       onPrev: () => setPage("COND1"),
       onNext: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
       onPerf: () => setPage("PERFWB"),

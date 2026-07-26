@@ -346,15 +346,17 @@ export default function CduEmulator({
           { label: "MENU", fn: onMenu },
           { label: "DLK",  fn: onDlk },
           { label: "NEXT", fn: onNext },
-          { label: "EXEC", fn: execAvailable ? onExec : null },
+          // 4th key is physically blank on this unit — there is no EXEC key.
+          // Sending is done the real way, via DATALINK SEND* at LSK 6R.
+          { label: "",     fn: null, blank: true },
           { label: "TRS",  fn: null },
           { label: "RADIO",fn: null },
         ].map((k, i) => (
-          <button key={k.label}
-            className={`cdu-key cdu-key-func ${k.label === "EXEC" && execAvailable ? "cdu-exec-active" : ""}`}
+          <button key={k.label || `blank${i}`}
+            className="cdu-key cdu-key-func"
             style={{ top: `${FUNC_ROW_Y[1]}%`, left: `${FUNC_COL_X[i]}%` }}
-            aria-label={k.label}
-            onClick={() => (k.fn ? k.fn() : handleUnimplemented(k.label))} />
+            aria-label={k.label || "blank"}
+            onClick={() => (k.blank ? null : k.fn ? k.fn() : handleUnimplemented(k.label))} />
         ))}
 
         {/* ── BRT/DIM — image's own labels already match, just a transparent hit target ── */}
@@ -440,7 +442,7 @@ const CDU_CSS = `
   display: flex; flex-direction: column; font-family: "Consolas","Menlo","DejaVu Sans Mono",monospace;
   overflow: hidden; }
 .cdu-screen-header { display: flex; align-items: center; justify-content: space-between; color: #eaeaea;
-  font-size: 3.9cqw; font-weight: 700; letter-spacing: 0.29cqw; padding-bottom: 2%; border-bottom: 1px solid #333; flex-shrink: 0; }
+  font-size: 3.9cqw; font-weight: 400; letter-spacing: 0.29cqw; padding-bottom: 2%; border-bottom: 1px solid #333; flex-shrink: 0; }
 .cdu-page-num { color: #7fd0ff; font-weight: 400; }
 .cdu-screen-body { flex: 1; display: flex; flex-direction: column; padding-top: 1.5%; overflow: hidden; min-height: 0; }
 /* 6 equal rows x 3 columns — the real screen's grid. Equal row heights are
@@ -456,7 +458,7 @@ const CDU_CSS = `
 .cdu-line-tight .cdu-line-label { font-size: 2.8cqw; }
 .cdu-line-tight .cdu-line-value { font-size: 3.6cqw; }
 .cdu-line-label { color: #7fd0ff; font-size: 3.0cqw; letter-spacing: 0.12cqw; white-space: nowrap; }
-.cdu-line-value { color: #f2f2f2; font-size: 4.5cqw; font-weight: 700; letter-spacing: 0.14cqw; white-space: nowrap; }
+.cdu-line-value { color: #f2f2f2; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw; white-space: nowrap; }
 .cdu-line-value.cdu-line-small { font-size: 3.5cqw; font-weight: 400; }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
@@ -474,7 +476,7 @@ const CDU_CSS = `
 .cdu-dim { color: #5a5a5a; }
 .cdu-line-error { color: #ff5c4d; }
 .cdu-return-line { color: #f2f2f2; }
-.cdu-scratchpad { color: #fff; font-size: 4.5cqw; font-weight: 700; letter-spacing: 0.14cqw;
+.cdu-scratchpad { color: #fff; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw;
   border-top: 1px solid #333; margin-top: 1%; padding-top: 1%; min-height: 4.9cqw; flex-shrink: 0;
   white-space: nowrap; overflow: hidden; }
 .cdu-scratch-error { color: #ff5c4d; }
