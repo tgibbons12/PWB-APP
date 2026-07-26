@@ -442,10 +442,24 @@ def generate():
     atow_lbs = tow_lbs + 2000
 
     # ---- Runway selection + manual speed overrides ----
+    # runway == "ALL" requests every published runway in one ACARS-style
+    # request, matching the real AeroData CDU's "ACARS T/O RWY DATA" report,
+    # which returns one TAKEOFF PERFORMANCE block per requested runway
+    # (pages 3/5, 4/5, 5/5 etc. — one page per runway, up to 3 at a time).
+    # Intersection substitution and per-field speed overrides are tuned for
+    # a single runway, so both are skipped in ALL mode — every runway is
+    # reported at its full published length with computed (non-overridden)
+    # speeds, same as the real system's multi-runway request.
     runway_id = body.get("runway")
-    selected_runways = [r for r in xml_data.get("valid_runways", []) if r.get("id") == runway_id]
-    if not selected_runways:
-        return _error(f"Runway '{runway_id}' not found in xml_data.valid_runways.")
+    all_runways = runway_id == "ALL"
+    if all_runways:
+        selected_runways = list(xml_data.get("valid_runways", []))
+        if not selected_runways:
+            return _error("No runways available in xml_data.valid_runways.")
+    else:
+        selected_runways = [r for r in xml_data.get("valid_runways", []) if r.get("id") == runway_id]
+        if not selected_runways:
+            return _error(f"Runway '{runway_id}' not found in xml_data.valid_runways.")
 
     # ---- Intersection selection ----
     # xml_data["intersections"][runway_id] is a list of {"id","label","tora_ft"}
@@ -463,7 +477,7 @@ def generate():
     # Previously this value was accepted by the API but silently dropped —
     # selecting an intersection had no effect on anything.
     intersection_id = body.get("intersection", "FULL")
-    if intersection_id and intersection_id != "FULL":
+    if not all_runways and intersection_id and intersection_id != "FULL":
         intxn_options = xml_data.get("intersections", {}).get(runway_id, [])
         matched = next((o for o in intxn_options if o.get("id") == intersection_id), None)
         if matched is None:
@@ -477,7 +491,7 @@ def generate():
         ]
 
     speed_overrides = body.get("speedOverrides", {})
-    if speed_overrides:
+    if not all_runways and speed_overrides:
         # Applied the same way rwy.get('_widget_overrides', {}) is re-applied
         # inside generate_tps() after TLR interpolation — user edits win last.
         selected_runways = [dict(r, _widget_overrides=speed_overrides) for r in selected_runways]

@@ -51,7 +51,7 @@ const FIELD_VALIDATORS = {
   v1: (v) => /^\d{2,3}$/.test(v) ? v : null,
   vr: (v) => /^\d{2,3}$/.test(v) ? v : null,
   v2: (v) => /^\d{2,3}$/.test(v) ? v : null,
-  runway: (v) => /^[0-9]{1,2}[LRC]?[XYZ]?$/.test(v.toUpperCase()) ? v.toUpperCase() : null,
+  runway: (v) => /^([0-9]{1,2}[LRC]?[XYZ]?|ALL)$/.test(v.toUpperCase()) ? v.toUpperCase() : null,
   simbrief: (v) => /^[A-Za-z0-9_\-.]{1,24}$/.test(v) ? v : null,
 };
 

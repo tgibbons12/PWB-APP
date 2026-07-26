@@ -95,14 +95,20 @@ export default function CduApp() {
   const [printPageIndex, setPrintPageIndex] = useState(0);
 
   // ── Data helpers ──────────────────────────────────────────────────────────
+  const allRunwaysSelected = runway === "ALL";
   const rwyData = xmlData?.valid_runways?.find(r => r.id === runway) ?? xmlData?.valid_runways?.[0] ?? null;
-  const intxnOptions = (xmlData?.intersections?.[rwyData?.id]) ?? [{ id: "FULL", label: "FULL" }];
+  // "ALL" requests every published runway in one ACARS request (matches the
+  // real system's multi-runway report) — intersections are per-runway, so
+  // only FULL length applies when ALL is selected.
+  const intxnOptions = allRunwaysSelected
+    ? [{ id: "FULL", label: "FULL" }]
+    : (xmlData?.intersections?.[rwyData?.id]) ?? [{ id: "FULL", label: "FULL" }];
   const scenarioChoices = availableScenarios(xmlData);
   const conditionsEdited = !!xmlData && (oat !== xmlData.temp || qnh !== xmlData.qnh || wind !== xmlData.wind);
-  // Authoritative post-EXEC result for the selected runway — matches the
-  // {v1,vr,v2,flex,flaps,thr,acc_alt,tr_alt,trim_stab,mrtw} shape computed
-  // server-side by generate_combined_output().
-  const resultData = tpsResult?.runway_results?.[0] ?? null;
+  // Authoritative post-EXEC results — one entry per requested runway, matches
+  // the {airport,runway,length,v1,vr,v2,vfs,flex,flaps,trim_stab,mrtw,mtow,
+  // gtow_cg,acc_alt,...} shape computed server-side by generate_combined_output().
+  const runwayResults = tpsResult?.runway_results ?? [];
   // Authentic ACARS T/O RWY DATA loadsheet summary (FLT/RLS/TIME, WIND/OAT/QNH,
   // SECT A/B/C, GTOW/CG, ZFW/CG, TTL PAX, REMARKS) — matches the ERJ-170 POH
   // "ACARS Takeoff Runway Data" reference pages, computed server-side.
@@ -171,14 +177,23 @@ export default function CduApp() {
       return;
     }
     if (key === "runway") {
+      // Cycle: each published runway, then "ALL" (request every runway in
+      // one ACARS request, like the real system's multi-runway report),
+      // then back to the first.
       const runways = xmlData.valid_runways;
+      const cycleIds = [...runways.map(r => r.id), "ALL"];
       if (value === null) {
-        const idx = runways.findIndex(r => r.id === runway);
-        const next = runways[(idx + 1) % runways.length];
-        setRunway(next.id); setIntersection("FULL"); setSpeedOverrides({});
+        const idx = cycleIds.indexOf(runway);
+        const next = cycleIds[(idx + 1) % cycleIds.length];
+        setRunway(next); setIntersection("FULL"); setSpeedOverrides({});
         return;
       }
-      const match = runways.find(r => r.id === value.toUpperCase());
+      const typed = value.toUpperCase();
+      if (typed === "ALL") {
+        setRunway("ALL"); setIntersection("FULL"); setSpeedOverrides({});
+        return;
+      }
+      const match = runways.find(r => r.id === typed);
       if (!match) return { error: "INVALID ENTRY" };
       setRunway(match.id); setIntersection("FULL"); setSpeedOverrides({});
       return;
@@ -256,14 +271,18 @@ export default function CduApp() {
     }
   }
 
+  // V-speed / FLEX / FLAPS overrides only make sense for a single requested
+  // runway — when ALL runways are requested each gets its own computed
+  // speeds, so the override fields are shown read-only (preview of the
+  // first runway's values) instead of editable.
   const perf2Fields = xmlData ? [
-    { key: "v1",    label: "V1",     value: String(getSpeed("v1")),               side: "L", editable: true },
-    { key: "vr",    label: "VR",     value: String(getSpeed("vr")),               side: "L", editable: true },
-    { key: "v2",    label: "V2",     value: String(getSpeed("v2")),               side: "L", editable: true },
-    { key: "flex",  label: "FLEX",   value: forceMax ? "MAX" : String(getSpeed("flex")), side: "R", editable: !forceMax },
-    { key: "flaps", label: "FLAPS",  value: String(getSpeed("flaps")),            side: "R", editable: true },
-    { key: "maxthr",label: "MAX THR",value: forceMax ? "ON" : "OFF",              side: "R", editable: true, cyclable: true },
-    { key: "thr",   label: "THR",    value: rwyData?.thr ?? "",                   side: "C", editable: false },
+    { key: "v1",    label: "V1",     value: String(getSpeed("v1")),               side: "L", editable: !allRunwaysSelected },
+    { key: "vr",    label: "VR",     value: String(getSpeed("vr")),               side: "L", editable: !allRunwaysSelected },
+    { key: "v2",    label: "V2",     value: String(getSpeed("v2")),               side: "L", editable: !allRunwaysSelected },
+    { key: "flex",  label: "FLEX",   value: forceMax ? "MAX" : String(getSpeed("flex")), side: "R", editable: !forceMax && !allRunwaysSelected },
+    { key: "flaps", label: "FLAPS",  value: String(getSpeed("flaps")),            side: "R", editable: !allRunwaysSelected },
+    { key: "maxthr",label: "MAX THR",value: forceMax ? "ON" : "OFF",              side: "R", editable: !allRunwaysSelected, cyclable: true },
+    { key: "thr",   label: "THR",    value: allRunwaysSelected ? "ALL RWYS" : (rwyData?.thr ?? ""), side: "C", editable: false },
     { key: "status",label: "",       value: perfStatus,                          side: "C", editable: false, small: true, error: perfStatusErr },
   ] : [];
 
@@ -299,31 +318,35 @@ export default function CduApp() {
     }
   }
 
-  // ── ACARS T/O RWY DATA — authentic 3-page post-EXEC report ────────────────
-  // Matches the real Honeywell AeroData ACARS "Takeoff Runway Data" pages
-  // (ERJ-170 POH ch.9 sec.16): page 1/3 = loadsheet summary (FLT/RLS/TIME,
-  // WIND/OAT/QNH, SECT A/B/C, GTOW/CG, ZFW/CG, TTL PAX), page 2/3 = REMARKS,
-  // page 3/3 = computed TAKEOFF PERFORMANCE for the requested runway.
+  // ── ACARS T/O RWY DATA — authentic post-EXEC report ───────────────────────
+  // Matches the real Honeywell AeroData ACARS "Takeoff Runway Data" report,
+  // confirmed field-for-field against a live-generated COMBINED.txt sample:
+  // page 1 = loadsheet summary (FLT/RLS/TIME, WIND/OAT/QNH, SECT A/B/C —
+  // pax + F/A CGO weight + GTOW/CG + ZFW/CG + FOB + TOT PAX), page 2 =
+  // REMARKS, then ONE TAKEOFF PERFORMANCE page per requested runway (a
+  // single runway normally, or every published runway at once when "ALL"
+  // is selected on PERF TAKEOFF 1/2 — same as the real system's multi-
+  // runway ACARS request, which pages 3/5, 4/5, 5/5... one per runway).
   function handleAcarsCommit(key, value) {
     if (key === "return" && value === null) setPage("PERF2");
   }
 
   const acarsSummaryFields = loadsheetSummary ? [
-    { key: "flt",   label: "FLT NO",     value: String(loadsheetSummary.flt_no),       side: "L", editable: false },
-    { key: "rls",   label: "RLS NO",     value: String(loadsheetSummary.rls_no),       side: "L", editable: false },
-    { key: "oat",   label: "OAT C",      value: String(loadsheetSummary.oat),          side: "L", editable: false },
-    { key: "seca",  label: "SEC A PAX",  value: String(loadsheetSummary.sect_a_pax),   side: "L", editable: false },
-    { key: "secb",  label: "SEC B PAX",  value: String(loadsheetSummary.sect_b_pax),   side: "L", editable: false },
-    { key: "secc",  label: "SEC C PAX",  value: String(loadsheetSummary.sect_c_pax),   side: "L", editable: false },
+    { key: "flt",   label: "FLT",        value: String(loadsheetSummary.flt_no),       side: "L", editable: false },
+    { key: "rls",   label: "RLS",        value: String(loadsheetSummary.rls_no),       side: "L", editable: false },
+    { key: "seca",  label: "SECT A",     value: String(loadsheetSummary.sect_a_pax),   side: "L", editable: false },
+    { key: "secb",  label: "SECT B",     value: String(loadsheetSummary.sect_b_pax),   side: "L", editable: false },
+    { key: "secc",  label: "SECT C",     value: String(loadsheetSummary.sect_c_pax),   side: "L", editable: false },
     { key: "time",  label: "TIME",       value: String(loadsheetSummary.time),         side: "R", editable: false },
     { key: "wind",  label: "WIND",       value: String(loadsheetSummary.wind),         side: "R", editable: false },
+    { key: "oat",   label: "OAT C",      value: String(loadsheetSummary.oat),          side: "R", editable: false },
     { key: "qnh",   label: "QNH",        value: String(loadsheetSummary.qnh),          side: "R", editable: false },
-    { key: "fbag",  label: "F BAG/WT",   value: String(loadsheetSummary.sect_a_bagwt), side: "R", editable: false },
-    { key: "abag",  label: "A BAG/WT",   value: String(loadsheetSummary.sect_b_bagwt), side: "R", editable: false },
-    { key: "fuel",  label: "FUEL",       value: String(loadsheetSummary.sect_c_fuel),  side: "R", editable: false },
+    { key: "fcgo",  label: "F CGO",      value: String(loadsheetSummary.sect_a_bagwt), side: "C", editable: false },
     { key: "gtow",  label: "GTOW/CG",    value: String(loadsheetSummary.gtow_cg),      side: "C", editable: false },
+    { key: "acgo",  label: "A CGO",      value: String(loadsheetSummary.sect_b_bagwt), side: "C", editable: false },
     { key: "zfw",   label: "ZFW/CG",     value: String(loadsheetSummary.zfw_cg),       side: "C", editable: false },
-    { key: "ttlpax",label: "TTL PAX",    value: String(loadsheetSummary.ttl_pax),      side: "C", editable: false },
+    { key: "fob",   label: "FOB",        value: String(loadsheetSummary.sect_c_fuel),  side: "C", editable: false },
+    { key: "totpax",label: "TOT PAX",    value: String(loadsheetSummary.ttl_pax),      side: "C", editable: false },
     { key: "status",label: "",           value: loadsheetSummary.takeoff_data_avail ? "TAKEOFF DATA AVAIL" : "NO TAKEOFF DATA AVAIL", side: "C", editable: false, small: true, error: !loadsheetSummary.takeoff_data_avail },
     { key: "return",label: "",           value: "",                                    side: "C", editable: true, returnLine: true },
   ] : [];
@@ -336,32 +359,41 @@ export default function CduApp() {
     { key: "return", label: "", value: "", side: "C", editable: true, returnLine: true },
   ] : [];
 
-  // Field set matches the real "ACARS T/O RWY DATA 3/5" reference page:
-  // left = FLEX/FLAP/STAB (config), right = V1/VR/V2, center = airport+
-  // runway+length, MRTW/LIM, MTOW, GTOW/CG, VFS, ACCEL.
-  const acarsPerfFields = resultData ? [
-    { key: "flex",  label: "FLEX",  value: String(resultData.flex),  side: "L", editable: false },
-    { key: "flap",  label: "FLAP",  value: String(resultData.flaps), side: "L", editable: false },
-    { key: "stab",  label: "STAB",  value: String(resultData.trim_stab), side: "L", editable: false },
-    { key: "v1",    label: "V1",    value: String(resultData.v1),    side: "R", editable: false },
-    { key: "vr",    label: "VR",    value: String(resultData.vr),    side: "R", editable: false },
-    { key: "v2",    label: "V2",    value: String(resultData.v2),    side: "R", editable: false },
-    { key: "rwy",   label: "RUNWAY / LENGTH", value: `${resultData.airport} ${resultData.runway}   ${resultData.length}FT`, side: "C", editable: false },
-    { key: "mrtw",  label: "MRTW / LIM", value: String(resultData.mrtw), side: "C", editable: false },
-    { key: "mtow",  label: "MTOW",  value: String(resultData.mtow), side: "C", editable: false },
-    { key: "gtow",  label: "GTOW / CG", value: String(resultData.gtow_cg), side: "C", editable: false },
-    { key: "vfs",   label: String(resultData.vfs_label || "VFS"), value: resultData.vfs != null ? String(resultData.vfs) : "---", side: "C", editable: false },
-    { key: "accel", label: "ACCEL", value: String(resultData.acc_alt), side: "C", editable: false },
-    { key: "return",label: "",       value: "",                       side: "C", editable: true, returnLine: true },
-  ] : [
-    { key: "none",   label: "", value: "NO TAKEOFF DATA AVAIL", side: "C", editable: false, error: true },
-    { key: "return", label: "", value: "", side: "C", editable: true, returnLine: true },
-  ];
+  // Field set matches a live-generated TAKEOFF PERFORMANCE block exactly:
+  // left = FLEX/FLAP/STAB, right = V1/VR/V2/VFS, center = airport+runway+
+  // length, MRTW/LIM, MTOW, GTOW/CG, ACCEL. One of these per runway result.
+  function buildPerfFields(rd) {
+    return [
+      { key: "flex",  label: "FLEX",  value: String(rd.flex),  side: "L", editable: false },
+      { key: "flap",  label: "FLAP",  value: String(rd.flaps), side: "L", editable: false },
+      { key: "stab",  label: "STAB",  value: String(rd.trim_stab), side: "L", editable: false },
+      { key: "v1",    label: "V1",    value: String(rd.v1),    side: "R", editable: false },
+      { key: "vr",    label: "VR",    value: String(rd.vr),    side: "R", editable: false },
+      { key: "v2",    label: "V2",    value: String(rd.v2),    side: "R", editable: false },
+      { key: "vfs",   label: String(rd.vfs_label || "VFS"), value: rd.vfs != null ? String(rd.vfs) : "---", side: "R", editable: false },
+      { key: "rwy",   label: "RUNWAY / LENGTH", value: `${rd.airport} ${rd.runway}   ${rd.length}FT`, side: "C", editable: false },
+      { key: "mrtw",  label: "MRTW / LIM", value: String(rd.mrtw), side: "C", editable: false },
+      { key: "mtow",  label: "MTOW",  value: String(rd.mtow), side: "C", editable: false },
+      { key: "gtow",  label: "GTOW / CG", value: String(rd.gtow_cg), side: "C", editable: false },
+      { key: "accel", label: "ACCEL", value: String(rd.acc_alt), side: "C", editable: false },
+      { key: "return",label: "",       value: "",                       side: "C", editable: true, returnLine: true },
+    ];
+  }
+
+  const perfPages = runwayResults.length
+    ? runwayResults.map(rd => ({ title: "ACARS T/O RWY DATA", fields: buildPerfFields(rd) }))
+    : [{
+        title: "ACARS T/O RWY DATA",
+        fields: [
+          { key: "none",   label: "", value: "NO TAKEOFF DATA AVAIL", side: "C", editable: false, error: true },
+          { key: "return", label: "", value: "", side: "C", editable: true, returnLine: true },
+        ],
+      }];
 
   const ACARS_PAGES = [
     { title: "ACARS T/O RWY DATA", fields: acarsSummaryFields },
     { title: "ACARS T/O RWY DATA", fields: acarsRemarksFields },
-    { title: "ACARS T/O RWY DATA", fields: acarsPerfFields },
+    ...perfPages,
   ];
 
   // ── TPS PRINT — paginated read-only text ──────────────────────────────────
