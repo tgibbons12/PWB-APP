@@ -126,19 +126,22 @@ function CduPackLine({ pack, tight }) {
 
 // Left/right LSK row y-centers as % of the whole chassis image height —
 // eyeballed from the image, evenly spaced starting just below the screen.
-const LSK_ROW_Y = [15.6, 21.0, 26.4, 31.8, 37.2, 42.6];
+const LSK_ROW_Y = [14.8, 20.3, 25.7, 31.1, 36.5, 42.0];
 
 // Function-key rows (PERF..CB / MENU..RADIO) and the BRT/DIM stack, in the
 // same percent-of-chassis space as the keypad grid below — measured off the
 // WebFMC reference screenshots, whose row pitch matches ALPHA_ROW_Y's.
-const FUNC_ROW_Y = [56.4, 63.1];
-const FUNC_COL_X = [10.0, 21.5, 32.8, 44.2, 55.6, 67.0, 78.5];
-const BRT_DIM_X = 91.3;
+const FUNC_ROW_Y = [54.0, 60.8];
+const FUNC_COL_X = [8.0, 19.9, 31.7, 43.7, 55.6, 67.6, 79.4];
+// BRT/DIM sit in their own tighter stack, not on the two function rows.
+const BRT_DIM_X = 93.1;
+const BRT_Y = 53.6;
+const DIM_Y = 58.1;
 
 // Alpha/numeric keypad grid — also eyeballed as % of chassis width/height.
-const ALPHA_ROW_Y = [70.0, 76.6, 83.2, 89.8, 96.4];
-const ALPHA_COL_X = [7.1, 16.8, 26.5, 36.3, 46.0, 55.8];
-const NUM_COL_X = [67.5, 76.1, 84.7, 93.3];
+const ALPHA_ROW_Y = [68.2, 74.7, 81.3, 87.8, 94.4];
+const ALPHA_COL_X = [6.5, 16.3, 26.1, 35.9, 45.7, 55.5];
+const NUM_COL_X = [66.9, 75.9, 84.8, 93.7];
 
 export default function CduEmulator({
   title = "PERF TAKEOFF",
@@ -355,8 +358,8 @@ export default function CduEmulator({
         ))}
 
         {/* ── BRT/DIM — image's own labels already match, just a transparent hit target ── */}
-        <button className="cdu-key cdu-key-func" style={{ top: `${FUNC_ROW_Y[0]}%`, left: `${BRT_DIM_X}%` }} aria-label="BRT" onClick={() => {}} />
-        <button className="cdu-key cdu-key-func" style={{ top: `${FUNC_ROW_Y[1]}%`, left: `${BRT_DIM_X}%` }} aria-label="DIM" onClick={() => {}} />
+        <button className="cdu-key cdu-key-func cdu-key-brt" style={{ top: `${BRT_Y}%`, left: `${BRT_DIM_X}%` }} aria-label="BRT" onClick={() => {}} />
+        <button className="cdu-key cdu-key-func cdu-key-brt" style={{ top: `${DIM_Y}%`, left: `${BRT_DIM_X}%` }} aria-label="DIM" onClick={() => {}} />
 
         {/* ── Keypad — image already shows correct labels (A-Z, 0-9, DEL, CLR,
             +/-, /, SP, .), so these are transparent click targets only ── */}
@@ -432,7 +435,7 @@ const CDU_CSS = `
    type is sized in cqw = percent of THIS box's width, so it scales with the
    chassis instead of staying a fixed px size next to huge LSKs on an iPad. */
 .cdu-screen { container-type: inline-size;
-  position: absolute; left: 15.5%; top: 6.2%; width: 69%; height: 43.5%;
+  position: absolute; left: 15.0%; top: 6.1%; width: 69.4%; height: 41.1%;
   background: #050505; border-radius: 3px; padding: 4% 4%; box-sizing: border-box;
   display: flex; flex-direction: column; font-family: "Consolas","Menlo","DejaVu Sans Mono",monospace;
   overflow: hidden; }
@@ -494,6 +497,8 @@ const CDU_CSS = `
 .cdu-key-wide { width: 9%; }
 /* Function keys are wider and shorter than the round keypad buttons. */
 .cdu-key-func { width: 10%; height: 4.2%; }
+/* BRT and DIM are a tight stack — shorter so they don't overlap each other. */
+.cdu-key-brt { width: 8%; height: 3.4%; }
 .cdu-key:active { background: rgba(255,255,255,0.1); border-radius: 4px; }
 /* EXEC armed — a glow over the image's own (unlabelled) key. */
 .cdu-exec-active { background: rgba(60,255,140,0.18); border-radius: 4px;
