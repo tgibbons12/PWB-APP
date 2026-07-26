@@ -336,18 +336,23 @@ export default function CduApp() {
     { key: "return", label: "", value: "", side: "C", editable: true, returnLine: true },
   ] : [];
 
+  // Field set matches the real "ACARS T/O RWY DATA 3/5" reference page:
+  // left = FLEX/FLAP/STAB (config), right = V1/VR/V2, center = airport+
+  // runway+length, MRTW/LIM, MTOW, GTOW/CG, VFS, ACCEL.
   const acarsPerfFields = resultData ? [
-    { key: "v1",     label: "V1",       value: String(resultData.v1),    side: "L", editable: false },
-    { key: "vr",     label: "VR",       value: String(resultData.vr),    side: "L", editable: false },
-    { key: "v2",     label: "V2",       value: String(resultData.v2),    side: "L", editable: false },
-    { key: "flaps",  label: "FLAPS",    value: String(resultData.flaps), side: "L", editable: false },
-    { key: "flex",   label: "FLEX TEMP",value: String(resultData.flex),  side: "R", editable: false },
-    { key: "thr",    label: "THRUST",   value: String(resultData.thr),   side: "R", editable: false },
-    { key: "accalt", label: "ACC ALT",  value: String(resultData.acc_alt), side: "R", editable: false },
-    { key: "tralt",  label: "TR ALT",   value: String(resultData.tr_alt),  side: "R", editable: false },
-    { key: "rwy",    label: "RUNWAY",   value: resultData.runway,        side: "C", editable: false },
-    { key: "trim",   label: "TRIM / MRTW", value: `${resultData.trim_stab}   ${resultData.mrtw}`, side: "C", editable: false },
-    { key: "return", label: "",         value: "",                       side: "C", editable: true, returnLine: true },
+    { key: "flex",  label: "FLEX",  value: String(resultData.flex),  side: "L", editable: false },
+    { key: "flap",  label: "FLAP",  value: String(resultData.flaps), side: "L", editable: false },
+    { key: "stab",  label: "STAB",  value: String(resultData.trim_stab), side: "L", editable: false },
+    { key: "v1",    label: "V1",    value: String(resultData.v1),    side: "R", editable: false },
+    { key: "vr",    label: "VR",    value: String(resultData.vr),    side: "R", editable: false },
+    { key: "v2",    label: "V2",    value: String(resultData.v2),    side: "R", editable: false },
+    { key: "rwy",   label: "RUNWAY / LENGTH", value: `${resultData.airport} ${resultData.runway}   ${resultData.length}FT`, side: "C", editable: false },
+    { key: "mrtw",  label: "MRTW / LIM", value: String(resultData.mrtw), side: "C", editable: false },
+    { key: "mtow",  label: "MTOW",  value: String(resultData.mtow), side: "C", editable: false },
+    { key: "gtow",  label: "GTOW / CG", value: String(resultData.gtow_cg), side: "C", editable: false },
+    { key: "vfs",   label: String(resultData.vfs_label || "VFS"), value: resultData.vfs != null ? String(resultData.vfs) : "---", side: "C", editable: false },
+    { key: "accel", label: "ACCEL", value: String(resultData.acc_alt), side: "C", editable: false },
+    { key: "return",label: "",       value: "",                       side: "C", editable: true, returnLine: true },
   ] : [
     { key: "none",   label: "", value: "NO TAKEOFF DATA AVAIL", side: "C", editable: false, error: true },
     { key: "return", label: "", value: "", side: "C", editable: true, returnLine: true },

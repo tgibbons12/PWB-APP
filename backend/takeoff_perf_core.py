@@ -2233,24 +2233,6 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
             tr_alt       = rwy.get('tr', acc_alt)
             eo_alt       = rwy.get('eo_acc', acc_alt)
 
-            # Structured result for the CDU — collected here so the frontend
-            # gets authoritative JSON fields instead of re-parsing the text.
-            runway_results.append({
-                "runway": rwy.get("id", ""),
-                "v1": v1_val,
-                "vr": vr_val,
-                "v2": v2_val,
-                "flex": flex_str,
-                "flaps": flap_str,
-                "thr": thr_str,
-                "acc_alt": acc_alt,
-                "tr_alt": tr_alt,
-                "eo_alt": eo_alt,
-                "trim_stab": trim_stab,
-                "mrtw": mrtw_lim_str,
-                "n1": n1_str,
-            })
-
             if base_type == 'DH8D':
                 v_label   = 'VCL'
                 v_val_raw = rwy.get('v_other') or rwy.get('vfs') or 'XXX'
@@ -2261,6 +2243,33 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
                 v_val = int(float(v_val_raw)) if v_val_raw not in ['XXX', 'None', None, ''] else None
             except (TypeError, ValueError):
                 v_val = None
+
+            # Structured result for the CDU — collected here so the frontend
+            # gets authoritative JSON fields instead of re-parsing the text.
+            # Field set mirrors the real AeroData ACARS "Takeoff Runway Data"
+            # page 3/5 (ERJ-170 POH ch.9 sec.16): airport/runway + length,
+            # FLEX/FLAP/STAB, MRTW-LIM/MTOW/GTOW-CG, V1/VR/V2/VFS, ACCEL.
+            runway_results.append({
+                "airport": sta,
+                "runway": rwy.get("id", ""),
+                "length": rwy_len,
+                "v1": v1_val,
+                "vr": vr_val,
+                "v2": v2_val,
+                "vfs": v_val,
+                "vfs_label": v_label,
+                "flex": flex_str,
+                "flaps": flap_str,
+                "thr": thr_str,
+                "acc_alt": acc_alt,
+                "tr_alt": tr_alt,
+                "eo_alt": eo_alt,
+                "trim_stab": trim_stab,
+                "mrtw": mrtw_lim_str,
+                "mtow": mtow_str,
+                "gtow_cg": gtow_cg_str,
+                "n1": n1_str,
+            })
 
             fra_code   = airport_altitudes.get('fra', '') if airport_altitudes else ''
             C1 = 8
