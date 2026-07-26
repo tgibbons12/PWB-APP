@@ -2062,6 +2062,9 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
         tail     = str(loadsheet_data['Ship Number'])
         rls_no   = str(loadsheet_data.get('RLS', 'UNKNOWN'))
         time_gen = loadsheet_data['Time Generated']
+        # get_utc_time() returns "HH:MM UTC"; the real ACARS report prints a
+        # bare Zulu time — "0144Z" (POH p.9-76), not "10:35 UTCZ".
+        time_z = time_gen.replace(" UTC", "").replace(":", "").strip() + "Z"
         wind     = uplink_data['wind']
         temp     = uplink_data['temp']
         qnh      = uplink_data['qnh']
@@ -2084,7 +2087,7 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
 
         # ── Header: FLT / RLS / TIME ──────────────────────────────────────
         f.write(_rj("FLT      RLS",  "TIME") + "\n")
-        f.write(_rj(f"{fn:<9}{rls_no}", f"{time_gen}Z") + "\n")
+        f.write(_rj(f"{fn:<9}{rls_no}", time_z) + "\n")
         # ── Wind / OAT / QNH ─────────────────────────────────────────────
         f.write(_rj("WIND     OAT C", "QNH") + "\n")
         try:
@@ -2134,7 +2137,7 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
         loadsheet_summary = {
             "flt_no": fn,
             "rls_no": rls_no,
-            "time": f"{time_gen}Z",
+            "time": time_z,
             "wind": wind,
             "oat": oat_int,
             "qnh": qnh,
@@ -2165,6 +2168,18 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
         is_airbus  = _icaocode.startswith('A')
         _ERJ_TYPES = {'E135', 'E140', 'E145', 'E45X'}
         is_erj     = _icaocode.upper().replace('-', '').replace(' ', '') in _ERJ_TYPES
+
+        # Aircraft-type-dependent column headings — the SAME rules the printed
+        # AERODATA report uses further up in this module, hoisted here so the
+        # CDU frontend renders the type-correct labels instead of hardcoding
+        # the E-Jet ones. (Airbus says CONF not FLAP; the MD-83 quotes EPR and
+        # the 737 N1 where everything else says THR; the Dash 8 calls the
+        # final-segment speed VCL not VFS; the ERJ family carries an extra
+        # V215 column.)
+        _is_md83      = _icaocode == 'MD83'
+        _is_b737      = _icaocode in ('B736', 'B737', 'B738', 'B739', 'B38M')
+        flap_label    = "CONF" if is_airbus else "FLAP"
+        thr_label     = "EPR" if _is_md83 else ("N1" if _is_b737 else "THR")
         ptow_k         = round(loadsheet_data.get('PTOW', 0) / 1000, 1)
         max_tow_struct = loadsheet_data.get('MAX TOW STRUCT', 0) / 1000
         trim_str       = trim_data['trim'] if trim_data else '   '
@@ -2269,6 +2284,19 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
                 "mtow": mtow_str,
                 "gtow_cg": gtow_cg_str,
                 "n1": n1_str,
+                # Type-dependent column headings (see the block where these
+                # are derived) so the CDU labels match the aircraft.
+                "flap_label": flap_label,
+                "thr_label": thr_label,
+                "third_col_label": third_col_label,
+                # V215 isn't stored on the runway — the printed report derives
+                # it as V2 + 15 (see the ERJ branch above), so do the same
+                # here. safe_val() returns a STRING ("---" when unusable), so
+                # this has to parse rather than assume an int.
+                "v215": (int(v2_val) + 15) if str(v2_val).lstrip("-").isdigit() else None,
+                "is_erj": is_erj,
+                "base_type": base_type,
+                "icaocode": _icaocode,
             })
 
             fra_code   = airport_altitudes.get('fra', '') if airport_altitudes else ''

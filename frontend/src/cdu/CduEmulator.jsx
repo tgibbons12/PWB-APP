@@ -128,6 +128,13 @@ function CduPackLine({ pack, tight }) {
 // eyeballed from the image, evenly spaced starting just below the screen.
 const LSK_ROW_Y = [15.6, 21.0, 26.4, 31.8, 37.2, 42.6];
 
+// Function-key rows (PERF..CB / MENU..RADIO) and the BRT/DIM stack, in the
+// same percent-of-chassis space as the keypad grid below — measured off the
+// WebFMC reference screenshots, whose row pitch matches ALPHA_ROW_Y's.
+const FUNC_ROW_Y = [56.4, 63.1];
+const FUNC_COL_X = [10.0, 21.5, 32.8, 44.2, 55.6, 67.0, 78.5];
+const BRT_DIM_X = 91.3;
+
 // Alpha/numeric keypad grid — also eyeballed as % of chassis width/height.
 const ALPHA_ROW_Y = [70.0, 76.6, 83.2, 89.8, 96.4];
 const ALPHA_COL_X = [7.1, 16.8, 26.5, 36.3, 46.0, 55.8];
@@ -311,40 +318,45 @@ export default function CduEmulator({
             onClick={() => handleLsk(rightFields[i])} aria-label={`LSK R${i + 1}`} />
         ))}
 
-        {/* ── Function keys — the image's own labels here (PERF/PREV/NEXT/FPL/
-            PROG/DIR/EXEC, AIRP/VOR/NDB/FIX/LAT-LON/RADIO) don't match the real
-            Honeywell ACARS function keys, so this panel is opaque and covers
-            that whole region instead of relying on the image underneath. ── */}
-        <div className="cdu-func-panel">
-          <div className="cdu-func-row">
-            <button className="cdu-func-key" onClick={() => (onPerf ? onPerf() : handleUnimplemented("PERF"))}>PERF</button>
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("NAV")}>NAV</button>
-            <button className="cdu-func-key" onClick={() => (onPrev ? onPrev() : handleUnimplemented("PREV"))}>PREV</button>
-            <button className="cdu-func-key" onClick={() => (onFpl ? onFpl() : handleUnimplemented("FPL"))}>FPL</button>
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("PROG")}>PROG</button>
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("RTE")}>RTE</button>
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("CB")}>CB</button>
-          </div>
-          <div className="cdu-func-row">
-            <button className="cdu-func-key" onClick={() => (onMenu ? onMenu() : handleUnimplemented("MENU"))}>MENU</button>
-            <button className={`cdu-func-key ${onDlk && execAvailable ? "cdu-exec-active" : ""}`} onClick={() => (onDlk ? onDlk() : handleUnimplemented("DLK"))}>DLK</button>
-            <button className="cdu-func-key" onClick={() => (onNext ? onNext() : handleUnimplemented("NEXT"))}>NEXT</button>
-            <button
-              className={`cdu-func-key cdu-exec-key ${execAvailable ? "cdu-exec-active" : ""}`}
-              onClick={() => execAvailable && onExec?.()}
-            >
-              EXEC
-            </button>
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("TRS")}>TRS</button>
-            <button className="cdu-func-key" onClick={() => handleUnimplemented("RADIO")}>RADIO</button>
-          </div>
-        </div>
+        {/* ── Function keys — the chassis image's own labels ARE the correct
+            E-Jet set (PERF/NAV/PREV/FPL/PROG/RTE/CB and MENU/DLK/NEXT/[blank]
+            /TRS/RADIO), so these are transparent hit-targets over the photo,
+            exactly like the alpha/numeric keypad below — no drawn-on panel.
+            The 4th key of row 2 is unlabelled on the real unit; it's bound to
+            EXEC here since this app needs a send key and the authentic path
+            (DATALINK SEND* at LSK 6R) is also wired. ── */}
+        {[
+          { label: "PERF", fn: onPerf },
+          { label: "NAV",  fn: null },
+          { label: "PREV", fn: onPrev },
+          { label: "FPL",  fn: onFpl },
+          { label: "PROG", fn: null },
+          { label: "RTE",  fn: null },
+          { label: "CB",   fn: null },
+        ].map((k, i) => (
+          <button key={k.label} className="cdu-key cdu-key-func"
+            style={{ top: `${FUNC_ROW_Y[0]}%`, left: `${FUNC_COL_X[i]}%` }}
+            aria-label={k.label}
+            onClick={() => (k.fn ? k.fn() : handleUnimplemented(k.label))} />
+        ))}
+        {[
+          { label: "MENU", fn: onMenu },
+          { label: "DLK",  fn: onDlk },
+          { label: "NEXT", fn: onNext },
+          { label: "EXEC", fn: execAvailable ? onExec : null },
+          { label: "TRS",  fn: null },
+          { label: "RADIO",fn: null },
+        ].map((k, i) => (
+          <button key={k.label}
+            className={`cdu-key cdu-key-func ${k.label === "EXEC" && execAvailable ? "cdu-exec-active" : ""}`}
+            style={{ top: `${FUNC_ROW_Y[1]}%`, left: `${FUNC_COL_X[i]}%` }}
+            aria-label={k.label}
+            onClick={() => (k.fn ? k.fn() : handleUnimplemented(k.label))} />
+        ))}
 
         {/* ── BRT/DIM — image's own labels already match, just a transparent hit target ── */}
-        <div className="cdu-brt-dim">
-          <button className="cdu-brt-key" onClick={() => {}} aria-label="BRT" />
-          <button className="cdu-brt-key" onClick={() => {}} aria-label="DIM" />
-        </div>
+        <button className="cdu-key cdu-key-func" style={{ top: `${FUNC_ROW_Y[0]}%`, left: `${BRT_DIM_X}%` }} aria-label="BRT" onClick={() => {}} />
+        <button className="cdu-key cdu-key-func" style={{ top: `${FUNC_ROW_Y[1]}%`, left: `${BRT_DIM_X}%` }} aria-label="DIM" onClick={() => {}} />
 
         {/* ── Keypad — image already shows correct labels (A-Z, 0-9, DEL, CLR,
             +/-, /, SP, .), so these are transparent click targets only ── */}
@@ -473,28 +485,17 @@ const CDU_CSS = `
 .cdu-lsk-right { right: 0%; }
 .cdu-lsk:active { background: rgba(255,255,255,0.08); }
 
-/* Function key panel — OPAQUE, covers the image's PERF/PREV/.../RADIO row
-   (whose labels don't match) and redraws it with the real ACARS keys. */
-.cdu-func-panel { position: absolute; left: 2%; top: 51.5%; width: 96.5%; height: 14.5%;
-  background: #8b9198; border-radius: 6px; padding: 3%; box-sizing: border-box;
-  display: flex; flex-direction: column; gap: 4%; }
-.cdu-func-row { display: flex; gap: 3%; flex: 1; }
-.cdu-func-key { flex: 1; background: linear-gradient(180deg, #2b2b2e, #101012); color: #eee;
-  border: 1px solid #000; border-radius: 4px; font-size: 9.5px; font-weight: 600; padding: 0 2px;
-  cursor: pointer; box-shadow: 0 2px 2px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1); line-height: 1.1; }
-.cdu-func-key:active { transform: translateY(1px); }
-.cdu-exec-key { opacity: 0.45; }
-.cdu-exec-active { opacity: 1; box-shadow: 0 0 8px #3f8, inset 0 1px 0 rgba(255,255,255,0.2); }
-
-/* BRT/DIM — transparent hit targets, image already shows the correct labels. */
-.cdu-brt-dim { position: absolute; right: 1%; top: 51.5%; width: 11%; height: 14.5%;
-  display: flex; flex-direction: column; }
-.cdu-brt-key { flex: 1; background: transparent; border: none; cursor: pointer; padding: 0; }
-
-/* Keypad keys — transparent hit targets positioned over the image's own
-   labeled buttons (A-Z, 0-9, +/-, /, SP, ., DEL, CLR all already correct). */
+/* Keypad AND function keys — transparent hit targets positioned over the
+   image's own labeled buttons. Every label the image already carries is
+   correct (A-Z, 0-9, +/-, /, SP, ., DEL, CLR, and the PERF..CB /
+   MENU..RADIO function rows), so nothing is drawn on top of the photo. */
 .cdu-key { position: absolute; width: 7.5%; height: 4.8%; transform: translate(-50%, -50%);
   background: transparent; border: none; color: transparent; cursor: pointer; padding: 0; }
 .cdu-key-wide { width: 9%; }
+/* Function keys are wider and shorter than the round keypad buttons. */
+.cdu-key-func { width: 10%; height: 4.2%; }
 .cdu-key:active { background: rgba(255,255,255,0.1); border-radius: 4px; }
+/* EXEC armed — a glow over the image's own (unlabelled) key. */
+.cdu-exec-active { background: rgba(60,255,140,0.18); border-radius: 4px;
+  box-shadow: 0 0 8px rgba(60,255,140,0.6); }
 `;

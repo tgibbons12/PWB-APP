@@ -21,7 +21,7 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 // Real navigation tree (POH ch.9 sec.16 p.9-59 "ACARS Navigation Windows",
 // with page contents from cockpit footage where the two disagree):
 //
-//   MENU  --DLK-->  ACARS MAIN MENU  --PERFORMANCE>-->  ACARS RWY PERF/M&B
+//   MENU  --DLK-->  ACARS MAIN MENU  --PERFORMANCE>-->  ACARS RWY PERF/W&B
 //                          |                                  |
 //                     <PRE FLT                    <CONDITIONS / <LOADSHEET
 //                          |                            / <RWY DATA
@@ -38,7 +38,7 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 //                          MAINT▸/MCDU STAT▸, none implemented). Starting
 //                          page; DLK opens the ACARS MAIN MENU.
 //   ACARS MAIN MENU      — <PRE FLT and PERFORMANCE> are live
-//   ACARS RWY PERF/M&B   — TAKEOFF <CONDITIONS, W&B <LOADSHEET, TAKEOFF
+//   ACARS RWY PERF/W&B   — TAKEOFF <CONDITIONS, W&B <LOADSHEET, TAKEOFF
 //                          <RWY DATA; LANDING pages greyed out
 //   ACARS LOADSHEET      — AD/CH A/B/C, BAG/WT FWD/AFT, TTL FA/ACM, CLOSET,
 //                          T/O FUEL, BLST FUEL. Pre-filled from the OFP but
@@ -59,8 +59,8 @@ import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } f
 //   ACARS T/O RWY DATA   — loadsheet summary (FLT/RLS/SECT A/B/C/GTOW-CG/
 //                          ZFW-CG/FOB/TOT PAX), REMARKS, then one TAKEOFF
 //                          PERFORMANCE page per requested runway
-//   TPS PRINT            — the full generated ACARS text, paginated like a
-//                          real CDU TEXT/REPORTS page, with a PRINT key
+// The generated .txt is downloadable via the FPL key; it is deliberately NOT
+// a browsable page — real CDUs don't display a raw report dump.
 //
 // Known simplifications vs. the real system:
 //   - No raw-XML paste fallback — SimBrief username only.
@@ -190,7 +190,7 @@ export default function CduApp() {
   // ── ACARS MAIN MENU ────────────────────────────────────────────────────────
   // Line-for-line from real E-Jet cockpit footage of this exact software.
   // (The POH's p.9-60 diagram shows an older variant — <IN FLT/<FREE TEXT/
-  // <FLT TIMES with PERF/M&B at 4R — so the footage wins, per the same rule
+  // <FLT TIMES with PERF/W&B at 4R — so the footage wins, per the same rule
   // used everywhere else here.) Only <PRE FLT and PERFORMANCE> are wired:
   // everything else is a different ACARS application this app doesn't cover,
   // so it's drawn greyed-out rather than omitted, keeping the page honest.
@@ -214,7 +214,7 @@ export default function CduApp() {
     { key: "perf",    label: "", value: "PERFORMANCE>",  side: "R", editable: true, selectable: true, tone: "white" },
   ];
 
-  // ── ACARS RWY PERF/M&B ─────────────────────────────────────────────────────
+  // ── ACARS RWY PERF/W&B ─────────────────────────────────────────────────────
   // Exactly the POH's p.9-69 layout: TAKEOFF <CONDITIONS / W&B <LOADSHEET /
   // TAKEOFF <RWY DATA on the left, LANDING CONDITIONS> and LANDING RWY DATA>
   // on the right (both greyed — this app computes takeoff performance only),
@@ -286,7 +286,7 @@ export default function CduApp() {
     { key: "adchc",   label: "AD/CH C",      value: adChC,   side: "L", editable: true, tone: "amber" },
     { key: "bagfwd",  label: "BAG/WT FWD",   value: bagFwd,  side: "L", editable: true, tone: "cyan" },
     { key: "bagaft",  label: "BAG/WT AFT",   value: bagAft,  side: "L", editable: true, tone: "cyan" },
-    { key: "perfwb",  label: "",             value: "<PERF/M&B", side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "perfwb",  label: "",             value: "<PERF/W&B", side: "L", editable: true, selectable: true, tone: "white" },
     { key: "faacm",   label: "TTL FA/ACM",   value: faAcm,   side: "R", editable: true, tone: "cyan" },
     { key: "closet",  label: "CLOSET",       value: closet,  side: "R", editable: true, tone: "cyan" },
     { key: "tofuel",  label: "T/O FUEL",     value: toFuel,  side: "R", editable: true, tone: "cyan" },
@@ -408,7 +408,7 @@ export default function CduApp() {
 
   function handleCond1Commit(key, value) {
     if (key === "return") {
-      // 6L on the real T/O CONDITIONS page returns to the PERF/M&B menu.
+      // 6L on the real T/O CONDITIONS page returns to the PERF/W&B menu.
       if (value === null) setPage("PERFWB");
       return; // DELETE on the return line: not applicable, no-op
     }
@@ -476,7 +476,7 @@ export default function CduApp() {
     { key: "rwy3",     label: `${depIcao} RWY 3`, value: runway3, side: "L", editable: true, cyclable: true, tone: "cyan" },
     { key: "surface",  label: "SURFACE",   value: SURFACE_LABELS[surface] ?? surface, side: "L", editable: true, cyclable: true, tone: "cyan" },
     { key: "level",    label: "LEVEL",     value: "---",           side: "L", dim: true, dimLabel: "CONTAM LEVEL" },
-    { key: "return",   label: "",          value: "",              side: "L", editable: true, returnLine: true, returnLabel: "<PERF/M&B" },
+    { key: "return",   label: "",          value: "",              side: "L", editable: true, returnLine: true, returnLabel: "<PERF/W&B" },
     { key: "wind",     label: "WIND",      value: String(wind),    side: "R", editable: true, tone: "amber" },
     { key: "oatqnh",   label: "OAT C/QNH", value: `${oat}/${qnh}`, side: "R", editable: true, tone: "amber" },
     { key: "ptow",     label: "PTOW",      value: ptow,            side: "R", editable: true, tone: "cyan" },
@@ -653,7 +653,11 @@ export default function CduApp() {
       { key: "flex",  label: "FLEX",     value: String(rd.flex),      side: "L", editable: false, tone: "green" },
       { key: "rwy",   label: "RUNWAY",   value: `${rd.airport} ${rd.runway}`, side: "C", row: 0, editable: false, tone: "green" },
       { key: "v1",    label: "V1",       value: String(rd.v1),        side: "R", editable: false, tone: "green" },
-      { key: "flap",  label: "FLAP",     value: String(rd.flaps),     side: "L", editable: false, tone: "green" },
+      // FLAP/THR headings follow the aircraft type, same rules the printed
+      // AERODATA report uses (Airbus = CONF, MD-83 = EPR, 737 = N1), and the
+      // ERJ family carries an extra V215 column. The backend sends the
+      // resolved labels so the two outputs can't drift apart.
+      { key: "flap",  label: rd.flap_label || "FLAP", value: String(rd.flaps), side: "L", editable: false, tone: "green" },
       { key: "len",   label: "LENGTH",   value: `${rd.length}FT`,     side: "C", row: 1, editable: false, tone: "green" },
       { key: "vr",    label: "VR",       value: String(rd.vr),        side: "R", editable: false, tone: "green" },
       { key: "stab",  label: "STAB",     value: String(rd.trim_stab), side: "L", editable: false, tone: "green" },
@@ -663,6 +667,14 @@ export default function CduApp() {
       { key: "accel", label: "ACCEL",    value: String(rd.acc_alt),   side: "C", row: 3, editable: false, tone: "green" },
       { key: "vfs",   label: String(rd.vfs_label || "VFS"), value: rd.vfs != null ? String(rd.vfs) : "---", side: "R", editable: false, tone: "green" },
       { key: "gtow",  label: "GTOW/CG",  value: String(rd.gtow_cg),   side: "L", editable: false, tone: "green" },
+      // ERJ-only extra speed column, and the type-specific thrust reading
+      // (EPR / N1 / THR) when the backend computed one.
+      ...(rd.is_erj && rd.v215 != null
+        ? [{ key: "v215", label: "V215", value: String(rd.v215), side: "C", row: 4, editable: false, tone: "green" }]
+        : []),
+      ...(rd.n1
+        ? [{ key: "thr", label: rd.thr_label || "THR", value: String(rd.n1), side: "R", editable: false, tone: "green" }]
+        : []),
       { key: "return",label: "",         value: "",                    side: "L", editable: true, returnLine: true },
     ];
   }
@@ -683,24 +695,9 @@ export default function CduApp() {
     ...perfPages,
   ];
 
-  // ── TPS PRINT — paginated read-only text ──────────────────────────────────
-  const printLines = tpsResult ? tpsResult.content.replace(/\r/g, "").split("\n") : [];
-  const totalPrintPages = Math.max(1, Math.ceil(printLines.length / LINES_PER_PRINT_PAGE));
-  const currentPrintLines = printLines.slice(
-    printPageIndex * LINES_PER_PRINT_PAGE,
-    printPageIndex * LINES_PER_PRINT_PAGE + LINES_PER_PRINT_PAGE
-  );
-  const printFields = currentPrintLines.map((line, i) => ({
-    key: `line${i}`, label: "", value: line || " ", side: "C", editable: false, small: true,
-  }));
-
-  function handlePrintPrev() {
-    if (printPageIndex > 0) setPrintPageIndex(i => i - 1);
-    else { setAcarsPageIndex(ACARS_PAGES.length - 1); setPage("ACARS"); }
-  }
-  function handlePrintNext() {
-    if (printPageIndex < totalPrintPages - 1) setPrintPageIndex(i => i + 1);
-  }
+  // The generated .txt is downloadable (FPL key) but is no longer shown as a
+  // paginated on-screen page — a real CDU never displays a raw report dump,
+  // and it made NEXT alternate between formatted screens and raw text.
   function handlePrintDownload() {
     if (tpsResult) forceDownloadTxt(tpsResult.content, tpsResult.filename);
   }
@@ -727,7 +724,7 @@ export default function CduApp() {
     };
   } else if (page === "PERFWB") {
     cduProps = {
-      title: "ACARS RWY PERF/M&B", pageNum: "",
+      title: "ACARS RWY PERF/W&B", pageNum: "",
       fields: perfWbFields,
       onFieldCommit: handlePerfWbCommit,
       execAvailable: false,
@@ -793,24 +790,18 @@ export default function CduApp() {
         if (acarsPageIndex > 0) setAcarsPageIndex(i => i - 1);
         else setPage("COND2");
       },
-      onNext: () => {
-        if (acarsPageIndex < ACARS_PAGES.length - 1) setAcarsPageIndex(i => i + 1);
-        else { setPrintPageIndex(0); setPage("PRINT"); }
-      },
+      // Wraps within the report pages. There is no raw-text page in the
+      // cycle any more: paging used to fall through into a "TPS PRINT" dump
+      // of the generated .txt, so NEXT alternated between the real formatted
+      // screens and a wall of raw text. The .txt is still downloadable with
+      // the FPL key, which is what that page was really for.
+      onNext: () => setAcarsPageIndex(i => (i + 1) % ACARS_PAGES.length),
       onPerf: () => setPage("PERFWB"),
       onFpl: handlePrintDownload,
     };
-  } else { // PRINT
-    cduProps = {
-      title: "TPS PRINT", pageNum: `${printPageIndex + 1}/${totalPrintPages}`,
-      fields: printFields,
-      onFieldCommit: () => {},
-      execAvailable: false,
-      onPrev: handlePrintPrev,
-      onNext: handlePrintNext,
-      onPerf: () => setPage("PERFWB"),
-      onFpl: handlePrintDownload, // FPL repurposed as PRINT/DOWNLOAD on this page
-    };
+  } else {
+    cduProps = { title: "ACARS", pageNum: "", fields: [], onFieldCommit: () => {},
+      onPerf: () => setPage("PERFWB") };
   }
 
   return (
