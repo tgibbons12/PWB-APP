@@ -78,9 +78,14 @@ def _build_intersections(xml_data):
     distance_reject_ft per runway that parse_xml_raw already extracted
     into each runway dict as 'distance_reject'.
 
-    Returns { runway_id: ["FULL", "<id>X — TXWY ...", ...] } — a list of
-    display strings per runway, safe to drop straight into the
-    <select> the TpsPanel intersection dropdown already renders.
+    Returns { runway_id: [{"id": "FULL", "label": "FULL"}, {"id": "31LX",
+    "label": "31LX — TXWY JA/JB", "tora_ft": 9200.0}, ...] } — structured
+    so the frontend can submit the clean `id` (used for the actual TORA/TLR
+    lookup) while still showing the friendly `label` in the dropdown. This
+    used to return pre-formatted display strings directly as the option
+    values, which meant the selected intersection could never be cleanly
+    matched back to real runway data server-side — this is the fix for
+    that: id and label are now separate fields.
     """
     index_data = core.load_runway_index()
     icao = xml_data.get("origin_icao", "")
@@ -98,10 +103,14 @@ def _build_intersections(xml_data):
             icao, rwy_id, full_tora_ft, distance_reject_ft, index_data
         )
 
-        options = ["FULL"]
+        options = [{"id": "FULL", "label": "FULL", "tora_ft": full_tora_ft}]
         for g in groups:
             txwy_str = "/".join(g["taxiways"])
-            options.append(f"{g['id']} — TXWY {txwy_str}")
+            options.append({
+                "id": g["id"],
+                "label": f"{g['id']} — TXWY {txwy_str}",
+                "tora_ft": g["tora_ft"],
+            })
 
         result[rwy_id] = options
 
@@ -207,6 +216,30 @@ def upload_runway_index():
                 "survive the next deploy — commit runway_index.dat to the repo "
                 "for a permanent change.",
     })
+
+
+@app.route("/api/oooi/status", methods=["GET"])
+def oooi_status():
+    """
+    Reads oooi_log.txt directly from this machine's local filesystem
+    (core.OOOI_LOG_PATH — the Dropbox/ACARS path) and returns the parsed
+    values, or found=False if the file doesn't exist yet.
+
+    Unlike /api/oooi/parse (which takes browser-supplied text because it
+    was built for the Railway deployment, which has no local filesystem
+    access), this route only makes sense when Flask is running ON the
+    same Mac that has the ACARS Dropbox folder synced — i.e. the local
+    closeout backend, not the Railway TPS backend. Calling this against
+    Railway will always return found=False since that path never exists
+    there.
+    """
+    exists = os.path.exists(core.OOOI_LOG_PATH)
+    if not exists:
+        return jsonify({"found": False, "off_block": None, "total_fuel_lbs": None, "zfw_lbs": None})
+
+    result = core.read_oooi_log()
+    has_data = result.get("total_fuel_lbs") is not None or result.get("zfw_lbs") is not None
+    return jsonify({"found": has_data, **result})
 
 
 @app.route("/api/oooi/parse", methods=["POST"])
@@ -414,6 +447,35 @@ def generate():
     if not selected_runways:
         return _error(f"Runway '{runway_id}' not found in xml_data.valid_runways.")
 
+    # ---- Intersection selection ----
+    # xml_data["intersections"][runway_id] is a list of {"id","label","tora_ft"}
+    # built by _build_intersections() (see /api/flightplan). "FULL" is always
+    # the first entry and means "use the runway's full published length" —
+    # anything else means an intersection takeoff, which reduces the usable
+    # TORA below what the SimBrief-provided full length said.
+    #
+    # This substitution is what makes intersection selection actually affect
+    # the generated TPS: it changes BOTH (a) the runway id used for TLR-table
+    # lookup — so if the TLR text has a real row for e.g. "31LX", that row's
+    # published V-speeds are used directly instead of us estimating anything
+    # — and (b) the 'length' field used for the printed LENGTH/slope block
+    # when no TLR match exists and SimBrief's raw-length-based logic applies.
+    # Previously this value was accepted by the API but silently dropped —
+    # selecting an intersection had no effect on anything.
+    intersection_id = body.get("intersection", "FULL")
+    if intersection_id and intersection_id != "FULL":
+        intxn_options = xml_data.get("intersections", {}).get(runway_id, [])
+        matched = next((o for o in intxn_options if o.get("id") == intersection_id), None)
+        if matched is None:
+            return _error(
+                f"Intersection '{intersection_id}' not found for runway '{runway_id}'.",
+                status=422,
+            )
+        selected_runways = [
+            dict(r, id=matched["id"], length=matched["tora_ft"], _full_tora_ft=r.get("length"))
+            for r in selected_runways
+        ]
+
     speed_overrides = body.get("speedOverrides", {})
     if speed_overrides:
         # Applied the same way rwy.get('_widget_overrides', {}) is re-applied
@@ -473,6 +535,13 @@ def generate():
                 "content": _read_generated_file(co_path),
                 "filename": os.path.basename(co_path),
             }
+
+    except ValueError as e:
+        # Raised deliberately by generate_tps() for known, validated
+        # business-rule rejections (e.g. an intersection takeoff with no
+        # matching TLR performance data) — not a bug, so this gets a clean
+        # 422 with the exact safety message rather than a 500 traceback.
+        return _error(str(e), status=422)
 
     except Exception as e:
         # generate_tps/generate_closeout are ~800 combined lines with many

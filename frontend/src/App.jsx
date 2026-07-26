@@ -335,7 +335,7 @@ function TpsPanel({ xmlData, onGenerate, generating }) {
   // backend computes intersections separately via get_intersection_groups()
   // and returns them as a runway-id-keyed map, since that data depends on
   // runway_index.dat rather than anything in the SimBrief XML itself.
-  const intxnOptions = xmlData.intersections?.[rwyData.id] ?? ["FULL"];
+  const intxnOptions = xmlData.intersections?.[rwyData.id] ?? [{ id: "FULL", label: "FULL" }];
   function getSpeed(k) { return speedOverrides[k] ?? rwyData[k] ?? ""; }
   function setSpeed(k, v) { setSpeedOverrides(p => ({ ...p, [k]: v })); }
   function tlrAvail(s, c) { return !!(xmlData.tlr_tables?.[s]?.[c]); }
@@ -411,7 +411,7 @@ function TpsPanel({ xmlData, onGenerate, generating }) {
       <div className="srow">
         <div className="lbl">Intersection</div>
         <select className="ios-select" value={intersection} onChange={e => setIntersection(e.target.value)}>
-          {intxnOptions.map(o => <option key={o} value={o}>{o}</option>)}
+          {intxnOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
         </select>
       </div>
 

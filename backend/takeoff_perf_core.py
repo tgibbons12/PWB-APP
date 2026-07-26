@@ -1035,6 +1035,25 @@ def generate_tps(loadsheet_data, uplink_data, valid_runways, anti_ice_on, output
                     merged[_wk] = _wv
                     print(f"[TLR] RWY {rwy_id}: widget override {_wk}={_wv!r} applied over TLR")
                 updated_runways.append(merged)
+            elif rwy.get('_full_tora_ft') is not None:
+                # This runway entry is an INTERSECTION takeoff (app.py set
+                # _full_tora_ft when substituting the reduced TORA — see
+                # /api/generate). SimBrief's XML-provided V1/VR/V2 are
+                # computed for the FULL-length runway, not this shortened
+                # distance. Takeoff performance (V-speeds and MTOW) is
+                # runway-remaining-dependent — that's the whole reason TLR
+                # tables publish separate rows per intersection — so falling
+                # back to full-length speeds for a shorter runway would
+                # silently understate required V-speeds / overstate MTOW.
+                # There is no other runway-remaining-based performance
+                # source in this codebase to correct for that safely, so
+                # this must hard-stop rather than guess.
+                raise ValueError(
+                    f"No TLR data found for intersection takeoff at {rwy_id}. "
+                    f"Takeoff performance depends on runway remaining, and only "
+                    f"full-length speeds are available for this runway — select "
+                    f"FULL or a different intersection with published TLR data."
+                )
             else:
                 print(f"[TLR] RWY {rwy_id}: no TLR table match — keeping SimBrief XML speeds.")
                 updated_runways.append(rwy)
