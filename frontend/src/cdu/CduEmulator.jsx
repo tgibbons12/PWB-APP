@@ -339,7 +339,7 @@ const CDU_CSS = `
 /* Screen — positioned over the image's black rect. */
 .cdu-screen { position: absolute; left: 15.5%; top: 6.2%; width: 69%; height: 43.5%;
   background: #050505; border-radius: 3px; padding: 4% 4%; box-sizing: border-box;
-  display: flex; flex-direction: column; font-family: "Menlo","Courier New",monospace;
+  display: flex; flex-direction: column; font-family: "Consolas","Menlo","DejaVu Sans Mono",monospace;
   overflow: hidden; }
 .cdu-screen-header { display: flex; align-items: center; justify-content: space-between; color: #eaeaea;
   font-size: 11px; font-weight: 700; letter-spacing: 1px; padding-bottom: 3%; border-bottom: 1px solid #333; flex-shrink: 0; }
@@ -357,7 +357,7 @@ const CDU_CSS = `
 .cdu-line-tight .cdu-line-label { font-size: 7.5px; }
 .cdu-line-tight .cdu-line-value { font-size: 10px; }
 .cdu-line-label { color: #7fd0ff; font-size: 8.5px; letter-spacing: 0.4px; }
-.cdu-line-value { color: #f2f2f2; font-size: 12px; font-weight: 600; min-height: 13px; }
+.cdu-line-value { color: #f2f2f2; font-size: 12px; font-weight: 700; letter-spacing: 0.5px; min-height: 13px; }
 .cdu-line-value.cdu-line-small { font-size: 10px; font-weight: 400; }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
