@@ -70,6 +70,20 @@ import ejetChassis from "./ejet.453de855.png";
 // "*DELETE*" prompt, which stays in the scratchpad until an LSK targets it.
 export const DELETE_TOKEN = "*DELETE*";
 
+// The stylesheet is injected ONCE into <head>, not rendered as a <style> tag
+// inside the component. It used to sit in the JSX, so every keystroke — which
+// updates scratchpad state and re-renders — handed the browser the whole CSS
+// string again to diff and re-evaluate. That was the typing lag.
+let cduCssInjected = false;
+function ensureCduCss() {
+  if (cduCssInjected || typeof document === "undefined") return;
+  const el = document.createElement("style");
+  el.setAttribute("data-cdu", "");
+  el.textContent = CDU_CSS;
+  document.head.appendChild(el);
+  cduCssInjected = true;
+}
+
 // Runway entries match the real AeroData ACARS convention: a runway id,
 // optionally with "/INTXN" for an intersection takeoff (e.g. "32L/T10").
 const RUNWAY_RE = /^[0-9]{1,2}[LRC]?[XYZ]?(\/[A-Z0-9]{1,6})?$/i;
@@ -199,6 +213,7 @@ export default function CduEmulator({
   // same proportional scaling on anything with ResizeObserver (iOS 13.4+).
   const screenRef = useRef(null);
   const [screenW, setScreenW] = useState(0);
+  useEffect(() => { ensureCduCss(); }, []);
   useEffect(() => {
     const el = screenRef.current;
     if (!el) return;
@@ -371,7 +386,6 @@ export default function CduEmulator({
 
   return (
     <div className="cdu-body">
-      <style>{CDU_CSS}</style>
 
       <div className={`cdu-unit ${showHotspots ? "cdu-debug" : ""}`}>
         {/* Real <img>, not a CSS background — lets the browser size the
@@ -614,7 +628,7 @@ body { margin: 0; }
 .cdu-loose { position: absolute; left: 0; right: 0; top: 13%;
   display: flex; flex-direction: column; align-items: stretch; }
 .cdu-loose .cdu-line { line-height: 1.0; }
-.cdu-loose .cdu-line-value { font-size: calc(var(--u) * 0.040); }
+.cdu-loose .cdu-line-value { font-size: calc(var(--u) * 0.043); }
 /* Monospace text blocks (the runway data block, REMARKS, SPECIAL) rely on
    column alignment, so spaces must be preserved verbatim. */
 .cdu-wide .cdu-line-value { font-variant-numeric: tabular-nums; }
@@ -630,15 +644,15 @@ body { margin: 0; }
 /* The real Honeywell face sets characters noticeably wider apart than any
    web mono — see the cockpit photos, where "ACARS T/O CONDITION" spans most
    of the screen. Extra tracking gets much closer with the fonts available. */
-.cdu-line-label { color: #f2f2f2; font-size: calc(var(--u) * 0.030); letter-spacing: calc(var(--u) * 0.0016); white-space: nowrap; }
+.cdu-line-label { color: #f2f2f2; font-size: calc(var(--u) * 0.033); letter-spacing: calc(var(--u) * 0.0016); white-space: nowrap; }
 /* Read-only values sit a step DOWN from line-selectable ones. Done this way
    round deliberately: 0.045u is the widest that fits a third-width column, so
    enlarging the selectable lines instead pushed values like "LOADSHEET>" past
    the cell edge and clipped them. */
-.cdu-line-value { color: #f2f2f2; font-size: calc(var(--u) * 0.040); font-weight: 400; letter-spacing: calc(var(--u) * 0.0022); white-space: nowrap; }
+.cdu-line-value { color: #f2f2f2; font-size: calc(var(--u) * 0.044); font-weight: 400; letter-spacing: calc(var(--u) * 0.0022); white-space: nowrap; }
 .cdu-line-value.cdu-line-small { font-size: calc(var(--u) * 0.035); font-weight: 400; }
 /* Line-selectable values — the reference size, which fits the column. */
-.cdu-line-value.cdu-line-sel { font-size: calc(var(--u) * 0.045); }
+.cdu-line-value.cdu-line-sel { font-size: calc(var(--u) * 0.050); }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
 .cdu-line-pack { display: flex; flex-direction: row; line-height: 1.05; }
