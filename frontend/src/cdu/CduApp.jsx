@@ -621,7 +621,10 @@ export default function CduApp() {
   }
 
   // Runs naclandapp's certified-table calculation for each requested runway.
-  // Purely local — no datalink involved, so no artificial delay here.
+  // The maths is local, but the crew-facing action is a DATALINK SEND* to
+  // AeroData (POH p.9-86), so it goes through the same simulated round-trip
+  // as the takeoff request — results appearing instantly gave the
+  // implementation away.
   function computeLanding() {
     if (!ldgData) return { text: "NO LANDING DATA", error: true };
     const acType = toEjetAcType(xmlData?.icaocode, xmlData?.base_type);
@@ -768,7 +771,9 @@ export default function CduApp() {
         }
         return { error: "LDG DATA LOADED - SET RWYCC" };
       }
-      return computeLanding();
+      if (uplinkBusy) return { error: "REQUEST PENDING" };
+      runDatalink("LAND REQUEST SENT", computeLanding);
+      return;
     }
   }
 
@@ -934,38 +939,28 @@ export default function CduApp() {
     const overWeight = maxWt && weightLb > Number(maxWt);
     // Dispatch check is against the FACTORED distance (121.195).
     const overrun = factored != null && lda > 0 && factored > lda;
-    // The real page (POH p.9-89) is 11 lines of EQUAL-size text, not
-    // label-above-value pairs: V-speeds are inline ("VRF 128") down the right,
-    // and FACTORED/UNFACTORED are label-left value-right on single lines. So
-    // it's rendered as a monospace block rather than on the LSK grid.
-    const L = (s) => String(s ?? "");
-    const pad = (s, n) => L(s).padEnd(n);
-    const rj = (s, n) => L(s).padStart(n);
-    const W = 24; // characters across the real screen
-    const spd = (name, v) => `${pad(name, 4)}${rj(v ?? "---", 3)}`;
-    const ft = (v) => (v != null ? `${v.toLocaleString()}FT` : "----");
-
-    const lines = [
-      `${pad(`${destIcao} ${rwy.id}`, 12)}${rj(Math.round(lda), 12)}`,
-      rj(`${Number(rwy.gradient) >= 0 ? "" : "-"}${Math.abs(Number(rwy.gradient) || 0).toFixed(2)}`, W),
-      ldgAntiIce === "ALL" ? "ECS ON" : "ECS OFF",
-      "- - - - - - - - - - - -",
-      `${pad("FLAP", 6)}${pad("MLDW/LIM", 10)}${spd("VRF", sp.vref)}`,
-      `${pad(ldgFlap === "Full" ? "FULL" : ldgFlap, 6)}${pad(maxWt ? `${fmtWeightK(Number(maxWt))}/S` : "---", 10)}${spd("VAP", sp.vapp)}`,
-      `${pad("", 6)}${pad("ALDW", 10)}${spd("VAC", sp.vac)}`,
-      `${pad("", 6)}${pad(ldwLb != null ? fmtWeightK(ldwLb) : "---", 10)}${spd("VFS", sp.vfs)}`,
-      `${pad("FACTORED DIST", 16)}${rj(ft(factored), 8)}`,
-      `${pad("UNFACTORED DIST", 16)}${rj(ft(unfactored), 8)}`,
-    ];
-
+    // Laid out on the 3-column grid, same style as the takeoff runway data
+    // page — labelled fields, not a monospace dump. Distances carry no
+    // thousands separator: the real screen shows "4361FT".
+    const ft = (v) => (v != null ? `${Math.round(v)}FT` : "----");
     return [
-      ...lines.map((l, i) => ({
-        key: `ld${i}`, label: "", value: l, side: "C", editable: false,
-        // Amber where the value breaches a limit, per the POH colour code.
-        tone: (i === 5 && overWeight) || (i === 8 && overrun) ? "amber" : "green",
-        wide: true,
-      })),
-      { key: "ret", label: "", value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
+      { key: "hdr", label: "RUNWAY / LDA", value: `${destIcao} ${rwy.id}   ${Math.round(lda)}FT`,
+        side: "C", row: 0, span: true, editable: false, tone: "green" },
+      { key: "cond", label: `${ldgAntiIce === "ALL" ? "ECS ON" : "ECS OFF"}   GRAD`,
+        value: `${Number(rwy.gradient) >= 0 ? "" : "-"}${Math.abs(Number(rwy.gradient) || 0).toFixed(2)}`,
+        side: "C", row: 1, span: true, editable: false, tone: "green" },
+      { key: "flap", label: "FLAP",     value: ldgFlap === "Full" ? "FULL" : ldgFlap, side: "L", row: 2, editable: false, tone: "green" },
+      { key: "mldw", label: "MLDW/LIM", value: maxWt ? `${fmtWeightK(Number(maxWt))}/S` : "---", side: "C", row: 2, editable: false,
+        tone: overWeight ? "amber" : "green", error: overWeight },
+      { key: "vrf",  label: "VRF",      value: sp.vref != null ? String(sp.vref) : "---", side: "R", row: 2, editable: false, tone: "green" },
+      { key: "aldw", label: "ALDW",     value: ldwLb != null ? fmtWeightK(ldwLb) : "---", side: "L", row: 3, editable: false, tone: "green" },
+      { key: "fact", label: "FACTORED DIST", value: ft(factored), side: "C", row: 3, editable: false,
+        tone: overrun ? "amber" : "green", error: overrun },
+      { key: "vap",  label: "VAP",      value: sp.vapp != null ? String(sp.vapp) : "---", side: "R", row: 3, editable: false, tone: "green" },
+      { key: "unfact", label: "UNFACTORED DIST", value: ft(unfactored), side: "C", row: 4, editable: false, tone: "green" },
+      { key: "vac",  label: "VAC",      value: sp.vac != null ? String(sp.vac) : "---", side: "R", row: 4, editable: false, tone: "green" },
+      { key: "ret",  label: "",         value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
+      { key: "vfs",  label: "VFS",      value: sp.vfs != null ? String(sp.vfs) : "---", side: "R", row: 5, editable: false, tone: "green" },
     ];
   }
 
@@ -1759,7 +1754,9 @@ export default function CduApp() {
       title: cur.title,
       pageNum: ldgPages.length ? `${ldgPageIndex + 1}/${ldgPages.length}` : "",
       fields: cur.fields,
-      onFieldCommit: (k) => { if (k === "ret") setPage("LANDCOND"); },
+      // Any RETURN line on any of the landing result pages goes back to the
+      // conditions page.
+      onFieldCommit: (k) => { if (k === "ret" || k === "ldgreturn") setPage("LANDCOND"); },
       execAvailable: false,
       message: ldgMessage,
       onPrev: () => {
