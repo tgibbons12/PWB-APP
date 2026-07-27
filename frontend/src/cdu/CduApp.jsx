@@ -239,6 +239,11 @@ export default function CduApp() {
   // the conditions page must match this before anything can be sent.
   const ofpRelease = xmlData?.RLS ?? "";
   const relOk = !!relVersion && relVersion === String(ofpRelease);
+  // Declared HERE, not down with the rest of the landing code: perfWbFields
+  // (further up) reads it to decide whether the two LANDING lines are live.
+  // A `const` declared after its first use sits in the temporal dead zone and
+  // throws on every render — which is exactly what blanked the screen.
+  const ldgData = xmlData?.landing ?? null;
 
   // ── MENU page — the app's starting page, matches the real Honeywell/
   // WebFMC top-level MENU screen exactly: ◂MISC and ◂BKUP RADIO on the
@@ -586,7 +591,6 @@ export default function CduApp() {
   ];
 
   // ── ACARS LANDING CONDITIONS ──────────────────────────────────────────────
-  const ldgData = xmlData?.landing ?? null;
   const ldgRunwayIds = (ldgData?.runways ?? []).map(r => r.id);
   const destIcao = ldgData?.airport || xmlData?.dest_icao || "----";
   // LDW = ZFW + arrival fuel, in pounds. Derived, never entered.
