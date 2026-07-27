@@ -228,24 +228,33 @@ export default function CduApp() {
   // loadsheet, results) back to a cold start. Destructive, so it's two-press:
   // the first press arms it and the line changes to CONFIRM RESET*, the
   // second carries it out. Anything else navigating away disarms it.
-  function resetAll() {
+  // Everything that belongs to a particular flight: the plan itself plus all
+  // the conditions/loadsheet entries and results derived from it. Shared by
+  // ACARS RESET and by changing DEP/DEST, since a new city pair invalidates
+  // exactly this set. The crew IDs and the SimBrief credential survive.
+  function clearFlightData() {
     setXmlData(null);
-    // Wipe the SimBrief ID too, including the persisted copy — otherwise a
-    // "reset" unit still comes up pre-filled with the last crew's username.
-    setSimbriefUsername("");
-    try { localStorage.removeItem("tps_simbrief_username"); } catch { /* private mode */ }
     setRunway1(""); setRunway2(""); setRunway3("");
     setSurface("PLANNED");
     setOat(""); setQnh(""); setWind(""); setPtow(""); setRelVersion("");
     setFlapSel("OPTIMUM"); setAntiIce(false); setForceMax(false); setLlwsAdvisory(false);
-    setFltNoEntry(""); setSkedDay(""); setDepEntry(""); setDestEntry(""); setFuelQty("");
+    setFltNoEntry(""); setSkedDay(""); setFuelQty("");
     setAdChA(""); setAdChB(""); setAdChC(""); setBagFwd(""); setBagAft("");
     setFaAcm("2/0"); setCloset("65"); setToFuel(""); setBlstFuel("");
     setPaxWtA(""); setPaxWtB(""); setPaxWtC(""); setCgPercent("25.0");
     setTpsResult(null); setAcarsPageIndex(0); setPrintPageIndex(0);
     setUplinkMsg(null); setUplinkBusy(false);
+  }
+
+  function resetAll() {
+    clearFlightData();
+    // Wipe the SimBrief ID too, including the persisted copy — otherwise a
+    // "reset" unit still comes up pre-filled with the last crew's username.
+    setSimbriefUsername("");
+    try { localStorage.removeItem("tps_simbrief_username"); } catch { /* private mode */ }
+    setDepEntry(""); setDestEntry("");
     setPerfStatus(""); setPerfStatusErr(false);
-    setIdentStatus("ENTER SIMBRIEF ID"); setIdentStatusErr(false);
+    setIdentStatus(""); setIdentStatusErr(false);
     setResetArmed(false);
   }
 
@@ -607,7 +616,10 @@ export default function CduApp() {
         const d = data.date_day ?? new Date().getUTCDate();
         setSkedDay(String(d));
       }
-      if (!fuelQty.trim() && data.plan_ramp_xml) setFuelQty(fmtWeightK(Number(data.plan_ramp_xml)));
+      // FUEL QTY always takes the newly uplinked figure — it belongs to the
+      // route that just came back, so keeping a previous route's number here
+      // would be wrong rather than merely stale.
+      if (data.plan_ramp_xml) setFuelQty(fmtWeightK(Number(data.plan_ramp_xml)));
 
       // Stay on INITIALIZE — the crew confirms the fetched data here and
       // navigates on deliberately.
@@ -627,7 +639,7 @@ export default function CduApp() {
     // Reads skedDay/fuelQty to avoid overwriting anything already typed, so
     // they must be dependencies — with an empty array this would close over
     // their initial (blank) values and clobber crew entries.
-  }, [skedDay, fuelQty]);
+  }, [skedDay]);
 
   // ACARS INITIALIZE — laid out exactly as POH p.9-62:
   //   1L FLT NO       | XPDR FLT ID (centre) |  1R SKED DAY
@@ -650,11 +662,19 @@ export default function CduApp() {
     }
     if (key === "dep" || key === "dest") {
       const setter = key === "dep" ? setDepEntry : setDestEntry;
+      const current = key === "dep" ? depEntry : destEntry;
       if (value === DELETE_TOKEN) { setter(""); return; }
       const v = String(value).toUpperCase();
       if (!/^[A-Z]{4}$/.test(v)) return { error: "INVALID ENTRY" };
+      // Changing a station invalidates everything downstream — runway list,
+      // conditions, loadsheet and any computed result all belong to the old
+      // city pair. Wipe them rather than leaving stale data on the pages.
+      if (current && current !== v) {
+        clearFlightData();
+        setter(v);
+        return { error: "DATA CLEARED - RE-INIT" };
+      }
       setter(v);
-      // Keep a loaded plan in step with a corrected station.
       setXmlData(d => (d ? { ...d, [key === "dep" ? "origin_icao" : "dest_icao"]: v } : d));
       return;
     }
@@ -1129,11 +1149,14 @@ export default function CduApp() {
       : kind === "erj" ? String(rd.thr || "TO1")
       : `FLEX - ${rd.thr || ""} - ${rd.third_col_label || "BLD"} ${rd.bleed || "ON"}`;
 
+    // Header occupies two FULL-WIDTH rows, as in the printed report. Packing
+    // station/runway/length, the departure-track line and the thrust strip
+    // into one three-column row truncated all three ("10081FT" -> "1008").
     const head = [
-      { key: "rwy", label: "RUNWAY / LENGTH", value: `${rd.airport} ${rd.runway}  ${rd.length}FT`,
-        side: "C", row: 0, editable: false, tone: "green" },
-      { key: "dt", label: "", value: dtLine, side: "L", editable: false, tone: "green", small: true },
-      { key: "thr", label: "", value: thrStrip, side: "R", editable: false, tone: "green", small: true },
+      { key: "rwy", label: "RUNWAY / LENGTH", value: `${rd.airport} ${rd.runway}   ${rd.length}FT`,
+        side: "C", row: 0, span: true, editable: false, tone: "green" },
+      { key: "dt", label: dtLine, value: thrStrip,
+        side: "C", row: 1, span: true, editable: false, tone: "green" },
     ];
 
     // AIRBUS — no MRTW/MTOW block at all; speeds carry their own right-hand
@@ -1148,7 +1171,7 @@ export default function CduApp() {
           side: "R", editable: false, tone: "green" },
         { key: "flex", label: "FLEX",     value: String(rd.flex), side: "R", editable: false, tone: "green" },
         { key: "alts", label: "TR / ACC / EO", value: `${rd.tr_alt} ${rd.acc_alt} ${rd.eo_alt}`,
-          side: "C", row: 4, editable: false, tone: "green", small: true },
+          side: "C", row: 5, span: true, editable: false, tone: "green" },
       ];
     }
 
@@ -1158,13 +1181,13 @@ export default function CduApp() {
       return [
         ...head,
         { key: "flaps", label: "FLAPS",    value: String(rd.flaps), side: "L", editable: false, tone: "green" },
-        { key: "mrtw",  label: "MRTW/LIM", value: String(rd.mrtw),  side: "C", row: 1, editable: false, tone: "green" },
+        { key: "mrtw",  label: "MRTW/LIM", value: String(rd.mrtw),  side: "C", row: 2, editable: false, tone: "green" },
         { key: "v1",    label: "V1",       value: String(rd.v1),    side: "R", editable: false, tone: "green" },
         { key: "stab",  label: "STAB",     value: String(rd.trim_stab), side: "L", editable: false, tone: "green" },
-        { key: "mtow",  label: "MTOW",     value: String(rd.mtow),  side: "C", row: 2, editable: false, tone: "green" },
+        { key: "mtow",  label: "MTOW",     value: String(rd.mtow),  side: "C", row: 3, editable: false, tone: "green" },
         { key: "vr",    label: "VR",       value: String(rd.vr),    side: "R", editable: false, tone: "green" },
         { key: "seloat",label: "SEL/OAT",  value: String(rd.sel_oat || ""), side: "L", editable: false, tone: "green" },
-        { key: "ptow",  label: "PTOW/CG",  value: String(rd.gtow_cg), side: "C", row: 3, editable: false, tone: "green" },
+        { key: "ptow",  label: "PTOW/CG",  value: String(rd.gtow_cg), side: "C", row: 4, editable: false, tone: "green" },
         { key: "v2",    label: "V2",       value: String(rd.v2),    side: "R", editable: false, tone: "green" },
         ...(rd.n1 ? [{ key: "n1", label: rd.thr_label || "N1", value: String(rd.n1), side: "R", editable: false, tone: "green" }] : []),
       ];
@@ -1175,13 +1198,13 @@ export default function CduApp() {
     return [
       ...head,
       { key: "flex",  label: "FLEX",     value: String(rd.flex),      side: "L", editable: false, tone: "green" },
-      { key: "mrtw",  label: "MRTW/LIM", value: String(rd.mrtw),      side: "C", row: 1, editable: false, tone: "green" },
+      { key: "mrtw",  label: "MRTW/LIM", value: String(rd.mrtw),      side: "C", row: 2, editable: false, tone: "green" },
       { key: "v1",    label: "V1",       value: String(rd.v1),        side: "R", editable: false, tone: "green" },
       { key: "flap",  label: rd.flap_label || "FLAP", value: String(rd.flaps), side: "L", editable: false, tone: "green" },
-      { key: "mtow",  label: "MTOW",     value: String(rd.mtow),      side: "C", row: 2, editable: false, tone: "green" },
+      { key: "mtow",  label: "MTOW",     value: String(rd.mtow),      side: "C", row: 3, editable: false, tone: "green" },
       { key: "vr",    label: "VR",       value: String(rd.vr),        side: "R", editable: false, tone: "green" },
       { key: "stab",  label: "STAB",     value: String(rd.trim_stab), side: "L", editable: false, tone: "green" },
-      { key: "gtow",  label: "GTOW/CG",  value: String(rd.gtow_cg),   side: "C", row: 3, editable: false, tone: "green" },
+      { key: "gtow",  label: "GTOW/CG",  value: String(rd.gtow_cg),   side: "C", row: 4, editable: false, tone: "green" },
       { key: "v2",    label: "V2",       value: String(rd.v2),        side: "R", editable: false, tone: "green" },
       { key: "accel", label: "ACCEL",    value: String(rd.acc_alt),   side: "L", editable: false, tone: "green" },
       { key: "vfs",   label: vfsLbl,     value: vfs,                  side: "R", editable: false, tone: "green" },

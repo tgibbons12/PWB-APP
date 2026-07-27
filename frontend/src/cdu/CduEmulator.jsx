@@ -182,6 +182,11 @@ export default function CduEmulator({
   const [scratchpad, setScratchpad] = useState("");
   const [scratchIsError, setScratchIsError] = useState(false);
 
+  // Debug overlay: outlines every hit-target so a screenshot shows exactly
+  // where the clickable areas sit relative to the chassis artwork. Toggled by
+  // the hidden spot on the bottom-left corner screw — invisible in normal use.
+  const [showHotspots, setShowHotspots] = useState(false);
+
   // System messages land in the scratchpad exactly like the real unit. They
   // clear on a SINGLE CLR or DEL press (they aren't typed text, so
   // backspacing through them character by character would be wrong).
@@ -311,7 +316,7 @@ export default function CduEmulator({
     <div className="cdu-body">
       <style>{CDU_CSS}</style>
 
-      <div className="cdu-unit">
+      <div className={`cdu-unit ${showHotspots ? "cdu-debug" : ""}`}>
         {/* Real <img>, not a CSS background — lets the browser size the
             container from the file's actual pixel dimensions instead of a
             guessed aspect-ratio, so the photo can't come out stretched or
@@ -326,11 +331,20 @@ export default function CduEmulator({
 
           <div className="cdu-screen-body">
             {gridRows.map((r, i) => (
-              <div className="cdu-row" key={i} style={{ top: `${ROW_Y_IN_SCREEN[i]}%` }}>
-                <div className="cdu-cell">{renderCell(r.L, "L")}</div>
-                <div className="cdu-cell">{renderCell(r.C, "C")}</div>
-                <div className="cdu-cell">{renderCell(r.R, "R")}</div>
-              </div>
+              // A centre field marked `span` takes the whole row instead of
+              // the middle third — needed for header text like
+              // "KBOS 15R  10081FT", which a one-third column truncates.
+              r.C?.span && !r.L && !r.R ? (
+                <div className="cdu-row cdu-row-span" key={i} style={{ top: `${ROW_Y_IN_SCREEN[i]}%` }}>
+                  {renderCell(r.C, "C")}
+                </div>
+              ) : (
+                <div className="cdu-row" key={i} style={{ top: `${ROW_Y_IN_SCREEN[i]}%` }}>
+                  <div className="cdu-cell">{renderCell(r.L, "L")}</div>
+                  <div className="cdu-cell">{renderCell(r.C, "C")}</div>
+                  <div className="cdu-cell">{renderCell(r.R, "R")}</div>
+                </div>
+              )
             ))}
             {looseCenter.length > 0 && (
               <div className="cdu-loose">
@@ -437,6 +451,15 @@ export default function CduEmulator({
         <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${NUM_COL_X[0]}%` }} onClick={() => appendChar(" ")} />
         <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${NUM_COL_X[1]}%` }} onClick={() => appendChar("0")} />
         <button className="cdu-key" style={{ top: `${ALPHA_ROW_Y[4]}%`, left: `${NUM_COL_X[2]}%` }} onClick={() => appendChar(".")} />
+
+        {/* Hidden debug toggle — bottom-left corner screw. Outlines every
+            hit-target so a screenshot shows where they sit against the
+            artwork. Deliberately unlabelled and invisible until pressed. */}
+        <button
+          className="cdu-debug-toggle"
+          aria-label="toggle hotspot overlay"
+          onClick={() => setShowHotspots(v => !v)}
+        />
       </div>
     </div>
   );
@@ -512,6 +535,8 @@ const CDU_CSS = `
 .cdu-row { position: absolute; left: 0; right: 0; transform: translateY(-69%);
   display: grid; grid-template-columns: 1fr 1fr 1fr; column-gap: 1%; }
 .cdu-cell { min-width: 0; overflow: hidden; }
+/* Full-width row — one value across all three columns. */
+.cdu-row-span { display: block; }
 /* Free-text pages (REMARKS, SPECIAL/EFP) flow from just under the header
    rather than being pinned to LSKs — they have no LSK bindings. */
 .cdu-loose { position: absolute; left: 0; right: 0; top: 14%;
@@ -584,6 +609,19 @@ const CDU_CSS = `
 /* BRT and DIM are a tight stack — shorter so they don't overlap each other. */
 .cdu-key-brt { width: 8%; height: 3.4%; }
 .cdu-key:active { background: rgba(255,255,255,0.1); border-radius: 4px; }
+/* ── Hotspot debug overlay ────────────────────────────────────────────────
+   Hidden toggle sits on the bottom-left corner screw. When on, every hit
+   target is outlined and tinted so a screenshot shows exactly how the
+   clickable areas line up against the chassis photo. Colour-coded: cyan for
+   LSKs, magenta for keypad, amber for function keys. */
+.cdu-debug-toggle { position: absolute; left: 1%; bottom: 0.5%; width: 7%; height: 4%;
+  background: transparent; border: none; cursor: pointer; padding: 0; z-index: 5; }
+.cdu-debug .cdu-key { background: rgba(255,0,255,0.22); outline: 1px solid #f0f; }
+.cdu-debug .cdu-key-func { background: rgba(255,176,32,0.22); outline: 1px solid #ffb020; }
+.cdu-debug .cdu-lsk { background: rgba(53,214,255,0.25); outline: 1px solid #35d6ff; }
+.cdu-debug .cdu-screen { outline: 1px solid #4dff7c; }
+.cdu-debug .cdu-row { outline: 1px dashed rgba(77,255,124,0.5); }
+
 /* EXEC armed — a glow over the image's own (unlabelled) key. */
 .cdu-exec-active { background: rgba(60,255,140,0.18); border-radius: 4px;
   box-shadow: 0 0 8px rgba(60,255,140,0.6); }
