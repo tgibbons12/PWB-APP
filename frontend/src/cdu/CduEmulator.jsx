@@ -202,7 +202,16 @@ export default function CduEmulator({
   useEffect(() => {
     const el = screenRef.current;
     if (!el) return;
-    const measure = () => setScreenW(el.getBoundingClientRect().width);
+    // Must be the CONTENT box, not the border box: `cqw` was resolved against
+    // the content box, and .cdu-screen carries 4% padding either side. Using
+    // getBoundingClientRect() made --u ~9% too large and the text overflowed
+    // its column. Derived from computed padding rather than a hardcoded
+    // factor so it stays correct if that padding ever changes.
+    const measure = () => {
+      const cs = getComputedStyle(el);
+      const pad = parseFloat(cs.paddingLeft || 0) + parseFloat(cs.paddingRight || 0);
+      setScreenW(Math.max(0, el.clientWidth - pad));
+    };
     measure();
     if (typeof ResizeObserver === "undefined") {
       window.addEventListener("resize", measure);
