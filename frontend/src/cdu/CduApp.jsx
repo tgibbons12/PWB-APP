@@ -276,7 +276,15 @@ export default function CduApp() {
     if (key === "toconditions") { setPage("COND1"); return; }
     if (key === "loadsheet")    { setPage("LOADSHEET"); return; }
     if (key === "torwydata") {
-      if (!tpsResult) return { error: "NO TAKEOFF DATA AVAIL" };
+      // T/O DATA> only VIEWS a result — it doesn't request one. Say what's
+      // actually missing rather than the bare "NO TAKEOFF DATA AVAIL", which
+      // reads like a failure when nothing has been sent yet.
+      if (!tpsResult) {
+        if (![runway1, runway2, runway3].some(r => r.trim())) return { error: "ENTER RUNWAY 1" };
+        if (!relVersion) return { error: "ENTER RLS VERSION 2/2" };
+        if (!relOk) return { error: `RLS MISMATCH - OFP ${ofpRelease}` };
+        return { error: "PRESS SEND FIRST" };
+      }
       setAcarsPageIndex(0); setPage("ACARS");
       return;
     }
@@ -358,7 +366,15 @@ export default function CduApp() {
       return;
     }
     if (key === "torwydata") {
-      if (!tpsResult) return { error: "NO TAKEOFF DATA AVAIL" };
+      // T/O DATA> only VIEWS a result — it doesn't request one. Say what's
+      // actually missing rather than the bare "NO TAKEOFF DATA AVAIL", which
+      // reads like a failure when nothing has been sent yet.
+      if (!tpsResult) {
+        if (![runway1, runway2, runway3].some(r => r.trim())) return { error: "ENTER RUNWAY 1" };
+        if (!relVersion) return { error: "ENTER RLS VERSION 2/2" };
+        if (!relOk) return { error: `RLS MISMATCH - OFP ${ofpRelease}` };
+        return { error: "PRESS SEND FIRST" };
+      }
       setAcarsPageIndex(0); setPage("ACARS");
       return;
     }
@@ -574,7 +590,15 @@ export default function CduApp() {
     // Shortcut keys (POH 4R/5R) and the DATALINK SEND* key (6R).
     if (key === "gotols")   { setPage("LOADSHEET"); return; }
     if (key === "gotodata") {
-      if (!tpsResult) return { error: "NO TAKEOFF DATA AVAIL" };
+      // T/O DATA> only VIEWS a result — it doesn't request one. Say what's
+      // actually missing rather than the bare "NO TAKEOFF DATA AVAIL", which
+      // reads like a failure when nothing has been sent yet.
+      if (!tpsResult) {
+        if (![runway1, runway2, runway3].some(r => r.trim())) return { error: "ENTER RUNWAY 1" };
+        if (!relVersion) return { error: "ENTER RLS VERSION 2/2" };
+        if (!relOk) return { error: `RLS MISMATCH - OFP ${ofpRelease}` };
+        return { error: "PRESS SEND FIRST" };
+      }
       setAcarsPageIndex(0); setPage("ACARS");
       return;
     }

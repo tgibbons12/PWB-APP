@@ -138,6 +138,20 @@ const BRT_DIM_X = 93.1;
 const BRT_Y = 53.6;
 const DIM_Y = 58.1;
 
+// Screen box geometry, as % of the chassis image (must match .cdu-screen).
+const SCREEN_TOP = 6.1;
+const SCREEN_HEIGHT = 41.1;
+
+// Each text row is pinned to its OWN LSK's y-coordinate, expressed as a
+// percentage of the screen box. Letting flexbox space the six rows evenly
+// instead made the error accumulate down the page — row 1 looked fine and
+// row 6 was a whole line out, because the body's height never exactly
+// matched the LSK span. Deriving the positions from LSK_ROW_Y means they
+// can't drift, and re-measuring the chassis only means editing LSK_ROW_Y.
+const ROW_Y_IN_SCREEN = LSK_ROW_Y.map(
+  (y) => ((y - SCREEN_TOP) / SCREEN_HEIGHT) * 100
+);
+
 // Alpha/numeric keypad grid — also eyeballed as % of chassis width/height.
 const ALPHA_ROW_Y = [68.2, 74.7, 81.3, 87.8, 94.4];
 const ALPHA_COL_X = [6.5, 16.3, 26.1, 35.9, 45.7, 55.5];
@@ -309,7 +323,7 @@ export default function CduEmulator({
 
           <div className="cdu-screen-body">
             {gridRows.map((r, i) => (
-              <div className="cdu-row" key={i}>
+              <div className="cdu-row" key={i} style={{ top: `${ROW_Y_IN_SCREEN[i]}%` }}>
                 <div className="cdu-cell">{renderCell(r.L, "L")}</div>
                 <div className="cdu-cell">{renderCell(r.C, "C")}</div>
                 <div className="cdu-cell">{renderCell(r.R, "R")}</div>
@@ -461,18 +475,35 @@ const CDU_CSS = `
 .cdu-screen { container-type: inline-size;
   position: absolute; left: 15.0%; top: 6.1%; width: 69.4%; height: 41.1%;
   background: #050505; border-radius: 3px; padding: 4% 4%; box-sizing: border-box;
-  display: flex; flex-direction: column; font-family: "Consolas","Menlo","DejaVu Sans Mono",monospace;
+  display: flex; flex-direction: column;
+  /* The real screen is a wide, squarish dot-matrix face. Nothing bundled with
+     a browser matches it exactly (a proper match needs a webfont file), but
+     these are the widest, squarest monospaces commonly available — much
+     closer than Consolas/Menlo, which are narrow and rounded. */
+  font-family: "Andale Mono","Lucida Console","DejaVu Sans Mono","Liberation Mono",
+               "Courier New",monospace;
   overflow: hidden; }
-.cdu-screen-header { display: flex; align-items: center; justify-content: space-between; color: #eaeaea;
-  font-size: 3.9cqw; font-weight: 400; letter-spacing: 0.29cqw; padding-bottom: 2%; border-bottom: 1px solid #333; flex-shrink: 0; }
-.cdu-page-num { color: #7fd0ff; font-weight: 400; }
-.cdu-screen-body { flex: 1; display: flex; flex-direction: column; padding-top: 1.5%; overflow: hidden; min-height: 0; }
-/* 6 equal rows x 3 columns — the real screen's grid. Equal row heights are
-   what keeps every line pinned to its own LSK no matter what a page holds. */
-.cdu-row { display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center;
-  flex: 1 1 0; min-height: 0; column-gap: 1%; }
+/* Title line is the SAME size as the body text on the real unit — having it
+   smaller was part of what made the rows look mis-spaced against the LSKs. */
+.cdu-screen-header { display: flex; align-items: center; justify-content: space-between; color: #4ee39a;
+  font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw; padding-bottom: 1%;
+  border-bottom: 1px solid #2a3a30; flex-shrink: 0; }
+.cdu-page-num { color: #4ee39a; font-weight: 400; }
+/* Spans the whole screen box so row positions can be expressed directly in
+   screen-box percentages (see ROW_Y_IN_SCREEN). */
+.cdu-screen-body { position: absolute; left: 4%; right: 4%; top: 0; bottom: 0;
+  overflow: hidden; pointer-events: none; }
+.cdu-screen-body > * { pointer-events: auto; }
+/* One row per LSK, absolutely pinned to that LSK's y-coordinate. The -69%
+   shift centres the VALUE line (not the label above it) on the button, which
+   is how the real screen lines up. */
+.cdu-row { position: absolute; left: 0; right: 0; transform: translateY(-69%);
+  display: grid; grid-template-columns: 1fr 1fr 1fr; column-gap: 1%; }
 .cdu-cell { min-width: 0; overflow: hidden; }
-.cdu-loose { display: flex; flex-direction: column; align-items: stretch; flex-shrink: 0; }
+/* Free-text pages (REMARKS, SPECIAL/EFP) flow from just under the header
+   rather than being pinned to LSKs — they have no LSK bindings. */
+.cdu-loose { position: absolute; left: 0; right: 0; top: 16%;
+  display: flex; flex-direction: column; align-items: stretch; }
 /* Full-width free text (REMARKS, SPECIAL/EFP) — left aligned and allowed to
    use the whole screen width instead of being boxed into one grid column. */
 .cdu-wide .cdu-line-value, .cdu-wide .cdu-line-label { text-align: left; white-space: pre-wrap; }
@@ -481,26 +512,33 @@ const CDU_CSS = `
 .cdu-line-tight { line-height: 1; }
 .cdu-line-tight .cdu-line-label { font-size: 2.8cqw; }
 .cdu-line-tight .cdu-line-value { font-size: 3.6cqw; }
-.cdu-line-label { color: #7fd0ff; font-size: 3.0cqw; letter-spacing: 0.12cqw; white-space: nowrap; }
-.cdu-line-value { color: #f2f2f2; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw; white-space: nowrap; }
+.cdu-line-label { color: #4ee39a; font-size: 3.0cqw; letter-spacing: 0.12cqw; white-space: nowrap; }
+.cdu-line-value { color: #4ee39a; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw; white-space: nowrap; }
 .cdu-line-value.cdu-line-small { font-size: 3.5cqw; font-weight: 400; }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
 .cdu-line-pack { display: flex; flex-direction: row; line-height: 1.05; }
 .cdu-line-pack.cdu-line-tight { line-height: 1; }
 .cdu-pack-item { flex: 1; text-align: center; }
-.cdu-editable { color: #7fff9e; }
-/* Real AeroData ACARS color code (ERJ-170 POH ch.9 sec.16, "Note" on the
-   ACARS MAIN MENU page): white = menu selection item, amber = mandatory
-   entry, cyan = optional entry, green = AeroData-provided output value. */
-.cdu-tone-white { color: #f2f2f2; }
-.cdu-tone-amber { color: #ffb020; }
-.cdu-tone-cyan  { color: #35d6ff; }
-.cdu-tone-green { color: #4dff7c; }
-.cdu-dim { color: #5a5a5a; }
+.cdu-editable { color: #4ee39a; }
+/* The POH (ch.9 sec.16) describes a four-colour scheme — white menu items,
+   amber mandatory, cyan optional, green output — but photos of the actual
+   E175 unit show a near-monochrome GREEN screen with amber used only for
+   values the crew has typed in. The photos win, as everywhere else here, so
+   every tone resolves to the same green except amber. The distinctions are
+   kept as separate classes so the four-colour scheme can be restored if a
+   colour-screen variant ever needs it. */
+.cdu-tone-white { color: #4ee39a; }
+.cdu-tone-cyan  { color: #4ee39a; }
+.cdu-tone-green { color: #4ee39a; }
+.cdu-tone-amber { color: #ffc44d; }
+.cdu-dim { color: #2f6b4e; }
 .cdu-line-error { color: #ff5c4d; }
-.cdu-scratchpad { color: #fff; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw;
-  border-top: 1px solid #333; margin-top: 1%; padding-top: 1%; min-height: 4.9cqw; flex-shrink: 0;
+/* Pinned to the bottom of the screen box — the body is absolutely positioned
+   over the whole box now, so the scratchpad can't rely on flow order. */
+.cdu-scratchpad { position: absolute; left: 4%; right: 4%; bottom: 2%;
+  color: #d8ffe8; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw;
+  border-top: 1px solid #2a3a30; padding-top: 1%; min-height: 4.9cqw;
   white-space: nowrap; overflow: hidden; }
 .cdu-scratch-error { color: #ff5c4d; }
 
