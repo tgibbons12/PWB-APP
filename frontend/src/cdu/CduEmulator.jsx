@@ -598,11 +598,14 @@ body { margin: 0; }
    web mono — see the cockpit photos, where "ACARS T/O CONDITION" spans most
    of the screen. Extra tracking gets much closer with the fonts available. */
 .cdu-line-label { color: #f2f2f2; font-size: 3.0cqw; letter-spacing: 0.16cqw; white-space: nowrap; }
-.cdu-line-value { color: #f2f2f2; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.22cqw; white-space: nowrap; }
+/* Read-only values sit a step DOWN from line-selectable ones. Done this way
+   round deliberately: 4.5cqw is the widest that fits a third-width column, so
+   enlarging the selectable lines instead pushed values like "LOADSHEET>" past
+   the cell edge and clipped them. */
+.cdu-line-value { color: #f2f2f2; font-size: 4.0cqw; font-weight: 400; letter-spacing: 0.22cqw; white-space: nowrap; }
 .cdu-line-value.cdu-line-small { font-size: 3.5cqw; font-weight: 400; }
-/* Line-selectable values sit slightly larger than read-only ones, so it's
-   obvious at a glance which lines a LSK press will act on. */
-.cdu-line-value.cdu-line-sel { font-size: 5.1cqw; }
+/* Line-selectable values — the reference size, which fits the column. */
+.cdu-line-value.cdu-line-sel { font-size: 4.5cqw; }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
 .cdu-line-pack { display: flex; flex-direction: row; line-height: 1.05; }
