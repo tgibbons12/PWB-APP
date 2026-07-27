@@ -100,7 +100,8 @@ const SURFACE_SHORTHAND = { PLANNED: "PLANNED", DRY: "DRY_PTOW", WET: "WET_PTOW"
 const LINES_PER_PRINT_PAGE = 11;
 
 export default function CduApp() {
-  // MENU | ACARSMENU | PERFWB | LOADSHEET | IDENT | COND1 | COND2 | ACARS | PRINT
+  // MENU | ACARSMENU | PREFLIGHT | IDENT | PERFWB | LOADSHEET | PAXDETAIL
+  // | COND1 | COND2 | ACARS
   const [page, setPage] = useState("MENU");
   const [acarsPageIndex, setAcarsPageIndex] = useState(0); // 0=summary 1=remarks 2..=perf per runway
 
@@ -248,8 +249,8 @@ export default function CduApp() {
   // everything else is a different ACARS application this app doesn't cover,
   // so it's drawn greyed-out rather than omitted, keeping the page honest.
   function handleAcarsMenuCommit(key) {
-    if (key === "preflt") { setPage("IDENT"); return; }
-    if (key === "perf")   { setPage(xmlData ? "PERFWB" : "IDENT"); return; }
+    if (key === "preflt") { setPage("PREFLIGHT"); return; }
+    if (key === "perf")   { setPage("PERFWB"); return; }
   }
 
   const acarsMenuFields = [
@@ -265,6 +266,37 @@ export default function CduApp() {
     { key: "reports", label: "", value: "REPORTS>",      side: "R", dim: true, dimLabel: "REPORTS" },
     { key: "requests",label: "", value: "REQUESTS>",     side: "R", dim: true, dimLabel: "REQUESTS" },
     { key: "perf",    label: "", value: "PERFORMANCE>",  side: "R", editable: true, selectable: true, tone: "white" },
+  ];
+
+  // ── ACARS PRE-FLIGHT (POH p.9-61) ──────────────────────────────────────────
+  //   1L <INITIALIZE            1R NEW MSGS>
+  //   2L <DEP DELAY
+  //   3L <FREE TEXT
+  //   4L <MX REQUEST
+  //   5L TAKEOFF <CONDITIONS    5R RWY PERF/W&B>
+  //   6L <MAIN MENU             6R ATS MENU>
+  // Only INITIALIZE, TAKEOFF CONDITIONS, RWY PERF/W&B and MAIN MENU are
+  // implemented; the rest are other ACARS applications and are greyed.
+  function handlePreflightCommit(key) {
+    if (key === "initialize")   { setPage("IDENT"); return; }
+    if (key === "toconditions") { setPage("COND1"); return; }
+    if (key === "perfwb")       { setPage("PERFWB"); return; }
+    if (key === "mainmenu")     { setPage("ACARSMENU"); return; }
+  }
+
+  const preflightFields = [
+    { key: "initialize",   label: "",        value: "<INITIALIZE",  side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "depdelay",     label: "",        value: "<DEP DELAY",   side: "L", dim: true, dimLabel: "DEP DELAY" },
+    { key: "freetext",     label: "",        value: "<FREE TEXT",   side: "L", dim: true, dimLabel: "FREE TEXT" },
+    { key: "mxrequest",    label: "",        value: "<MX REQUEST",  side: "L", dim: true, dimLabel: "MX REQUEST" },
+    { key: "toconditions", label: "TAKEOFF", value: "<CONDITIONS",  side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "mainmenu",     label: "",        value: "<MAIN MENU",   side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "newmsgs",      label: "",        value: "NEW MSGS>",    side: "R", dim: true, dimLabel: "NEW MSGS" },
+    { key: "_pf1",         label: "",        value: "",              side: "R", editable: false },
+    { key: "_pf2",         label: "",        value: "",              side: "R", editable: false },
+    { key: "_pf3",         label: "",        value: "",              side: "R", editable: false },
+    { key: "perfwb",       label: "RWY",     value: "PERF/W&B>",    side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "atsmenu",      label: "",        value: "ATS MENU>",    side: "R", dim: true, dimLabel: "ATS MENU" },
   ];
 
   // ── ACARS RWY PERF/W&B ─────────────────────────────────────────────────────
@@ -540,7 +572,9 @@ export default function CduApp() {
       // them into the fields as a preview the crew can then edit.
       setIdentStatus(`OFP LOADED - FLT ${data.flight_number} ${data.origin_iata}-${data.dest_iata}`);
       setIdentStatusErr(false);
-      setPage("PERFWB");
+      // Stay on INITIALIZE — the crew confirms the fetched data here and
+      // navigates on deliberately. Jumping straight to PERF/W&B skipped past
+      // the page they were working on.
     } catch (e) {
       setIdentStatus(e instanceof ApiError ? e.message.toUpperCase() : "COULD NOT REACH SERVER");
       setIdentStatusErr(true);
@@ -549,17 +583,23 @@ export default function CduApp() {
     }
   }, []);
 
-  // ACARS INITIALIZE — the POH page (p.9-62) is FLT NO / SKED DAY, DEP /
-  // XPDR FLT ID / DEST, FUEL QTY / BD FUEL, crew IDs, <RETURN / AUTO INIT*.
-  // Ours substitutes a SimBrief ID for the crew-entry fields (that one entry
-  // supplies everything the real crew would type), then shows DEP and DEST
-  // in the same 2L/2R slots as the real page. DEP/DEST are editable so the
-  // pair can be corrected without re-fetching, and they drive the runway
-  // list and the "KAUS RWY n" labels on the conditions page.
+  // ACARS INITIALIZE — laid out exactly as POH p.9-62:
+  //   1L FLT NO       | XPDR FLT ID (centre) |  1R SKED DAY
+  //   2L DEP          |                      |  2R DEST
+  //   3L FUEL QTY     |                      |  3R BD FUEL
+  //   4L CAPT ID      |                      |  4R CREW-3 ID
+  //   5L F/O ID       |                      |  5R CREW-4 ID
+  //   6L <RETURN      |                      |  6R DATALINK AUTO INIT*
+  // CAPT ID doubles as the SimBrief credential — it takes either a username
+  // or a numeric SimBrief pilot ID, which is what AUTO INIT* then fetches
+  // with. The remaining crew-ID slots are "no entry made" on the real page.
   function handleIdentCommit(key, value) {
-    if (key === "simbrief") {
+    if (key === "captid") {
       if (value === null) return;
-      doFetch(value);
+      if (value === DELETE_TOKEN) { setSimbriefUsername(""); return; }
+      // Either a SimBrief username or a numeric SimBrief pilot ID.
+      if (!/^[A-Za-z0-9_\-.]{1,24}$/.test(value)) return { error: "INVALID ENTRY" };
+      setSimbriefUsername(value);
       return;
     }
     if (key === "dep") {
@@ -576,27 +616,31 @@ export default function CduApp() {
       setXmlData(d => (d ? { ...d, dest_icao: v } : d));
       return;
     }
-    if (key === "return") { setPage("ACARSMENU"); return; }
+    if (key === "return") { setPage("PREFLIGHT"); return; }
     if (key === "autoinit") {
       const u = simbriefUsername.trim();
-      if (!u) return { error: "ENTER SIMBRIEF ID" };
+      if (!u) return { error: "ENTER CAPT ID" };
       doFetch(u);
       return;
     }
   }
 
   const identFields = [
-    { key: "simbrief", label: "SIMBRIEF ID", value: simbriefUsername, side: "L", editable: true, tone: "amber" },
-    ...(xmlData ? [
-      { key: "dep",  label: "DEP",    value: xmlData.origin_icao || "", side: "L", editable: true, tone: "amber" },
-      { key: "fuel", label: "FUEL QTY", value: String(xmlData.plan_ramp_xml ?? ""), side: "L", editable: false, tone: "green" },
-      { key: "flt",  label: "FLT NO", value: String(xmlData.flight_number), side: "R", editable: false, tone: "green" },
-      { key: "dest", label: "DEST",   value: xmlData.dest_icao || "", side: "R", editable: true, tone: "amber" },
-      { key: "ac",   label: "A/C",    value: xmlData.icaocode, side: "R", editable: false, tone: "green" },
-    ] : []),
-    // POH p.9-62 LSK 6R: DATALINK AUTO INIT* — fetches the flight data. This
-    // is how the OFP is pulled now that there's no EXEC key on the chassis.
+    { key: "flt",    label: "FLT NO",   value: xmlData ? String(xmlData.flight_number) : "", side: "L", editable: false, tone: "green" },
+    { key: "dep",    label: "DEP",      value: xmlData?.origin_icao || "", side: "L", editable: true, tone: "amber", boxes: "0000" },
+    { key: "fuel",   label: "FUEL QTY", value: xmlData?.plan_ramp_xml ? fmtWeightK(Number(xmlData.plan_ramp_xml)) : "", side: "L", editable: false, tone: "green" },
+    { key: "captid", label: "CAPT ID",  value: simbriefUsername, side: "L", editable: true, tone: "amber", boxes: "000000" },
+    { key: "foid",   label: "F/O ID",   value: "", side: "L", dim: true, dimLabel: "F/O ID" },
+    { key: "return", label: "",         value: "<RETURN", side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "skedday",label: "SKED DAY", value: xmlData?.date_day ?? "", side: "R", editable: false, tone: "green" },
+    { key: "dest",   label: "DEST",     value: xmlData?.dest_icao || "", side: "R", editable: true, tone: "amber", boxes: "0000" },
+    { key: "bdfuel", label: "BD FUEL",  value: "", side: "R", dim: true, dimLabel: "BD FUEL" },
+    { key: "crew3",  label: "CREW-3 ID",value: "", side: "R", dim: true, dimLabel: "CREW-3 ID" },
+    { key: "crew4",  label: "CREW-4 ID",value: "", side: "R", dim: true, dimLabel: "CREW-4 ID" },
+    // POH p.9-62 LSK 6R — fetches the flight data (no EXEC key on this unit).
     { key: "autoinit", label: "DATALINK", value: "AUTO INIT*", side: "R", editable: true, selectable: true, tone: "white" },
+    { key: "xpdr",   label: "XPDR FLT ID", value: xmlData?.flight_number ? String(xmlData.flight_number) : "????????",
+      side: "C", row: 0, editable: false, tone: "green" },
   ];
 
   // ── ACARS T/O CONDITION 1/2 (POH p.9-70/71) ────────────────────────────────
@@ -656,8 +700,11 @@ export default function CduApp() {
     }
     if (key === "send") {
       if (![runway1, runway2, runway3].some(r => r.trim())) return { error: "ENTER RUNWAY 1" };
-      // AeroData won't compute against a stale release — block the send.
-      // RLS VERSION is entered on page 2/2.
+      if (!String(wind).trim()) return { error: "ENTER WIND" };
+      if (!String(oat).trim() || !String(qnh).trim()) return { error: "ENTER OAT/QNH" };
+      if (!String(ptow).trim()) return { error: "ENTER PTOW" };
+      // AeroData won't compute against a stale release — this is the ONLY
+      // point the release version is checked; entry itself never rejects.
       if (!relVersion) return { error: "ENTER RLS VERSION 2/2" };
       if (!relOk) return { error: `RLS MISMATCH - OFP ${ofpRelease}` };
       handleExec();
@@ -686,6 +733,13 @@ export default function CduApp() {
   // airport's ICAO code shown above each entry line, confirming which
   // airport RWY 1/2/3 apply to. Render it from the loaded flight plan.
   const depIcao = xmlData?.origin_icao || "----";
+  // Every mandatory entry on the conditions page. Drives the REQUEST*/SEND>
+  // label as well as the send gate itself, so the two can't disagree.
+  const cond1Ready = !!(
+    [runway1, runway2, runway3].some(r => r.trim()) &&
+    String(wind).trim() && String(oat).trim() && String(qnh).trim() &&
+    String(ptow).trim() && relVersion.trim()
+  );
   // Exact POH p.9-70/71 layout. Note there is NO separate GUST field and no
   // REL VERSION field on the real page — per p.9-71 LSK 1R, gust is folded
   // into the WIND entry and only for a TAILWIND ("including the gust factor,
@@ -700,12 +754,17 @@ export default function CduApp() {
     { key: "surface",  label: "SURFACE",   value: SURFACE_LABELS[surface] ?? surface, side: "L", editable: true, cyclable: true, tone: "cyan" },
     { key: "level",    label: "LEVEL",     value: "---",           side: "L", dim: true, dimLabel: "CONTAM LEVEL" },
     { key: "return",   label: "",          value: "<PERF/W&B",     side: "L", editable: true, selectable: true, tone: "white" },
-    { key: "wind",     label: "WIND",     value: String(wind),      side: "R", editable: true, tone: "cyan" },
-    { key: "oatqnh",   label: "OAT/QNH",  value: oat || qnh ? `${oat}/${qnh}` : "", side: "R", editable: true, tone: "cyan" },
-    { key: "ptow",     label: "PTOW",     value: ptow,              side: "R", editable: true, tone: "cyan" },
+    // RWY 1, WIND, OAT/QNH and PTOW are all required — amber entry boxes,
+    // blank until the crew fills them.
+    { key: "wind",     label: "WIND",     value: String(wind),      side: "R", editable: true, tone: "amber", boxes: "000/00" },
+    { key: "oatqnh",   label: "OAT/QNH",  value: oat || qnh ? `${oat}/${qnh}` : "", side: "R", editable: true, tone: "amber", boxes: "000/00.00" },
+    { key: "ptow",     label: "PTOW",     value: ptow,              side: "R", editable: true, tone: "amber", boxes: "000.0" },
     { key: "gotols",   label: "W&B",      value: "LOADSHEET>",      side: "R", editable: true, selectable: true, tone: "white" },
     { key: "gotodata", label: "T/O",      value: "DATA>",           side: "R", editable: true, selectable: true, tone: "white" },
-    { key: "send",     label: "",         value: "SEND",            side: "R", editable: true, selectable: true, tone: "white" },
+    // Reads REQUEST* until every required field is in, then becomes SEND> —
+    // so the key itself shows whether the request is ready to go.
+    { key: "send",     label: "",         value: cond1Ready ? "SEND>" : "REQUEST*",
+      side: "R", editable: true, selectable: true, tone: cond1Ready ? "white" : "amber" },
   ] : [];
 
   // ── ACARS T/O CONDITION 2/2 — FLAP, ANTI-ICE, THRUST, RLS VERSION ─────────
@@ -725,8 +784,9 @@ export default function CduApp() {
     if (key === "perfwb") { setPage("PERFWB"); return; }
     if (key === "relversion") {
       if (value === DELETE_TOKEN) { setRelVersion(""); return; }
+      // Accepted without complaint — a mismatch is only rejected at SEND,
+      // not while the crew is still typing.
       setRelVersion(value);
-      if (value !== String(ofpRelease)) return { error: `RLS MISMATCH - OFP ${ofpRelease}` };
       return;
     }
     if (key === "flaps") {
@@ -993,8 +1053,9 @@ export default function CduApp() {
       execAvailable: false,
       // Leaving the page disarms the reset confirm — it should never stay
       // armed across a navigation and fire on a later, unrelated press.
+      // DLK is the datalink/ACARS key — that's how this app is entered.
+      // PERF is a core MCDU function and is deliberately NOT bound to it.
       onDlk: () => { setResetArmed(false); setPage("ACARSMENU"); },
-      onPerf: () => { setResetArmed(false); setPage(xmlData ? "PERFWB" : "ACARSMENU"); },
     };
   } else if (page === "ACARSMENU") {
     cduProps = {
@@ -1003,7 +1064,16 @@ export default function CduApp() {
       onFieldCommit: handleAcarsMenuCommit,
       execAvailable: false,
       onPrev: () => setPage("MENU"),
-      onPerf: () => setPage(xmlData ? "PERFWB" : "IDENT"),
+      onDlk: () => setPage("ACARSMENU"),
+    };
+  } else if (page === "PREFLIGHT") {
+    cduProps = {
+      title: "ACARS   PRE-FLIGHT", pageNum: "",
+      fields: preflightFields,
+      onFieldCommit: handlePreflightCommit,
+      execAvailable: false,
+      onPrev: () => setPage("ACARSMENU"),
+      onDlk: () => setPage("ACARSMENU"),
     };
   } else if (page === "PERFWB") {
     cduProps = {
@@ -1011,9 +1081,9 @@ export default function CduApp() {
       fields: perfWbFields,
       onFieldCommit: handlePerfWbCommit,
       execAvailable: false,
-      onPrev: () => setPage("ACARSMENU"),
+      onPrev: () => setPage("PREFLIGHT"),
       onNext: () => setPage("COND1"),
-      onPerf: () => setPage("PERFWB"),
+      onDlk: () => setPage("ACARSMENU"),
     };
   } else if (page === "LOADSHEET") {
     cduProps = {
@@ -1023,7 +1093,7 @@ export default function CduApp() {
       execAvailable: false, // no EXEC key on this unit — send is LSK 6R SEND*
       onPrev: () => setPage("PERFWB"),
       onNext: () => setPage("PAXDETAIL"), // 1/2 -> 2/2
-      onPerf: () => setPage("PERFWB"),
+      onDlk: () => setPage("ACARSMENU"),
     };
   } else if (page === "PAXDETAIL") {
     cduProps = {
@@ -1033,7 +1103,7 @@ export default function CduApp() {
       execAvailable: false,
       onPrev: () => setPage("LOADSHEET"),
       onNext: () => setPage("LOADSHEET"),
-      onPerf: () => setPage("PERFWB"),
+      onDlk: () => setPage("ACARSMENU"),
     };
   } else if (page === "IDENT") {
     cduProps = {
@@ -1044,7 +1114,7 @@ export default function CduApp() {
       message: identStatus ? { text: identStatus, error: identStatusErr } : undefined,
       onPrev: () => setPage("ACARSMENU"),
       onNext: xmlData ? () => setPage("PERFWB") : undefined,
-      onPerf: xmlData ? () => setPage("PERFWB") : undefined,
+      onDlk: () => setPage("ACARSMENU"),
     };
   } else if (page === "COND1") {
     cduProps = {
@@ -1055,7 +1125,7 @@ export default function CduApp() {
       message: perfStatus ? { text: perfStatus, error: perfStatusErr } : undefined,
       onPrev: () => setPage("PERFWB"),
       onNext: () => setPage("COND2"),
-      onPerf: () => setPage("PERFWB"),
+      onDlk: () => setPage("ACARSMENU"),
       onFpl: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
     };
   } else if (page === "COND2") {
@@ -1069,7 +1139,7 @@ export default function CduApp() {
       message: perfStatus ? { text: perfStatus, error: perfStatusErr } : undefined,
       onPrev: () => setPage("COND1"),
       onNext: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
-      onPerf: () => setPage("PERFWB"),
+      onDlk: () => setPage("ACARSMENU"),
       onFpl: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
     };
   } else if (page === "ACARS") {
@@ -1090,12 +1160,12 @@ export default function CduApp() {
       // screens and a wall of raw text. The .txt is still downloadable with
       // the FPL key, which is what that page was really for.
       onNext: () => setAcarsPageIndex(i => (i + 1) % ACARS_PAGES.length),
-      onPerf: () => setPage("PERFWB"),
+      onDlk: () => setPage("ACARSMENU"),
       onFpl: handlePrintDownload,
     };
   } else {
     cduProps = { title: "ACARS", pageNum: "", fields: [], onFieldCommit: () => {},
-      onPerf: () => setPage("PERFWB") };
+      onDlk: () => setPage("ACARSMENU") };
   }
 
   return (
