@@ -2323,6 +2323,16 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
                 "flap_label": flap_label,
                 "thr_label": thr_label,
                 "third_col_label": third_col_label,
+                # Header-line fields for the CDU's runway block, mirroring the
+                # printed report's first three lines:
+                #   KAUS 18L            9000
+                #   DT H175  OAT  26   -0.20
+                #    FLEX - TO1   - ECS ON
+                "mc": mc,
+                "slope": slope,
+                "oat": temp,
+                "bleed": bleed_str,
+                "efp_text": efp_text,
                 # V215 isn't stored on the runway — the printed report derives
                 # it as V2 + 15 (see the ERJ branch above), so do the same
                 # here. safe_val() returns a STRING ("---" when unusable), so

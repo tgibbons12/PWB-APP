@@ -226,13 +226,9 @@ export default function CduEmulator({
   const handleLsk = useCallback((field) => {
     if (!field) return; // clicked an LSK with nothing bound on that line
 
-    // Greyed-out menu items — shown (so the page matches the real screen
-    // line-for-line) but not implemented in this app.
-    if (field.dim) {
-      setScratchpad(`${field.dimLabel || "SELECTION"} NOT AVAIL`);
-      setScratchIsError(true);
-      return;
-    }
+    // Greyed-out lines — drawn so each page matches the real screen
+    // line-for-line, but inert. Pressing one does nothing at all.
+    if (field.dim) return;
 
     if (!scratchpad) {
       if (field.editable && (field.cyclable || field.selectable)) {
@@ -280,11 +276,11 @@ export default function CduEmulator({
     setScratchIsSystem(false);
   }, [scratchpad, onFieldCommit]);
 
-  const handleUnimplemented = useCallback((label) => {
-    setScratchIsError(false);
-    setScratchpad(`${label} NOT AVAIL`);
-    setScratchIsError(true);
-  }, []);
+  // Unbound MCDU function keys (NAV, PROG, RTE, CB, TRS, RADIO, and PERF —
+  // which belongs to the MCDU, not this app) simply do nothing, like a real
+  // key with no page behind it. They used to post "X NOT AVAIL" to the
+  // scratchpad, which read like an error the crew had caused.
+  const handleUnimplemented = useCallback(() => {}, []);
 
   const leftFields   = fields.filter(f => f.side === "L");
   const rightFields  = fields.filter(f => f.side === "R");
@@ -518,8 +514,11 @@ const CDU_CSS = `
 .cdu-cell { min-width: 0; overflow: hidden; }
 /* Free-text pages (REMARKS, SPECIAL/EFP) flow from just under the header
    rather than being pinned to LSKs — they have no LSK bindings. */
-.cdu-loose { position: absolute; left: 0; right: 0; top: 16%;
+.cdu-loose { position: absolute; left: 0; right: 0; top: 14%;
   display: flex; flex-direction: column; align-items: stretch; }
+/* Monospace text blocks (the runway data block, REMARKS, SPECIAL) rely on
+   column alignment, so spaces must be preserved verbatim. */
+.cdu-wide .cdu-line-value { font-variant-numeric: tabular-nums; }
 /* Full-width free text (REMARKS, SPECIAL/EFP) — left aligned and allowed to
    use the whole screen width instead of being boxed into one grid column. */
 .cdu-wide .cdu-line-value, .cdu-wide .cdu-line-label { text-align: left; white-space: pre-wrap; }
@@ -550,14 +549,19 @@ const CDU_CSS = `
 .cdu-tone-amber { color: #ffb020; }
 .cdu-tone-magenta { color: #ff6ee0; }
 .cdu-dim { color: #5a5a5a; }
-.cdu-line-error { color: #ff5c4d; }
+/* No red anywhere on screen — a field flagged in error stays amber (the
+   mandatory-entry colour) rather than turning red. */
+.cdu-line-error { color: #ffb020; }
 /* Pinned to the bottom of the screen box — the body is absolutely positioned
    over the whole box now, so the scratchpad can't rely on flow order. */
 .cdu-scratchpad { position: absolute; left: 4%; right: 4%; bottom: 2%;
   color: #fff; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw;
   border-top: 1px solid #333; padding-top: 1%; min-height: 4.9cqw;
   white-space: nowrap; overflow: hidden; }
-.cdu-scratch-error { color: #ff5c4d; }
+/* Scratchpad messages are ALWAYS white — the real unit never shows red here,
+   including for rejected entries. Kept as a class so the distinction still
+   exists in the markup without any colour difference. */
+.cdu-scratch-error { color: #fff; }
 
 /* LSK hit-targets — transparent, sit right on top of the image's own button
    graphics. Width/height are generous (wider than the visible button) so a

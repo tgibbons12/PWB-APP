@@ -146,6 +146,14 @@ export default function CduApp() {
   const [printPageIndex, setPrintPageIndex] = useState(0);
   const [resetArmed, setResetArmed] = useState(false); // ACARS RESET confirm latch
 
+  // ACARS INITIALIZE entries (POH p.9-62). All crew-typed; AUTO INIT fills
+  // none of them. DEP/DEST are required before AUTO INIT will fire.
+  const [fltNoEntry, setFltNoEntry] = useState("");
+  const [skedDay, setSkedDay] = useState("");
+  const [depEntry, setDepEntry] = useState("");
+  const [destEntry, setDestEntry] = useState("");
+  const [fuelQty, setFuelQty] = useState("");
+
   // ACARS LOADSHEET (ERJ-170 POH ch.9 sec.16 p.9-73/74) — "AD/CH" is
   // adults/children per cabin section, "BAG/WT" is bag count / freight
   // weight per hold. Stored as raw "a/b" strings exactly as typed, and
@@ -207,6 +215,7 @@ export default function CduApp() {
     setSurface("PLANNED");
     setOat(""); setQnh(""); setWind(""); setPtow(""); setRelVersion("");
     setFlapSel("OPTIMUM"); setAntiIce(false); setForceMax(false); setLlwsAdvisory(false);
+    setFltNoEntry(""); setSkedDay(""); setDepEntry(""); setDestEntry(""); setFuelQty("");
     setAdChA(""); setAdChB(""); setAdChC(""); setBagFwd(""); setBagAft("");
     setFaAcm("2/0"); setCloset("65"); setToFuel(""); setBlstFuel("");
     setPaxWtA(""); setPaxWtB(""); setPaxWtC(""); setCgPercent("25.0");
@@ -543,34 +552,21 @@ export default function CduApp() {
       localStorage.setItem("tps_simbrief_username", username);
       setSimbriefUsername(username);
 
-      const initRunway = data.valid_runways.some(r => r.id === data.plan_rwy)
-        ? data.plan_rwy
-        : (data.valid_runways[0]?.id ?? "");
-      setRunway1(initRunway);
-      setRunway2("");
-      setRunway3("");
+      // AUTO INIT populates NOTHING visible. The OFP is held in state for the
+      // downstream request and for the DATA REQ*/W/B REQ* buttons; every entry
+      // field on every page stays exactly as the crew left it (blank until
+      // typed). Auto-filling weather and runway here was hiding the difference
+      // between what was entered and what was assumed.
+      setRunway1(""); setRunway2(""); setRunway3("");
       setSurface("PLANNED");
       setFlapSel("OPTIMUM");
       setAntiIce(false);
       setForceMax(false);
-      setLlwsAdvisory(false);
-      setOat(data.temp);
-      setQnh(data.qnh);
-      setWind(data.wind);
-      setRelVersion("");
-      // PTOW is a real planned takeoff weight, entered in thousands of pounds
-      // with one decimal — POH p.9-71: "76.4 for 76,400 pounds". Seed it from
-      // the OFP's estimated TOW so it's a usable figure rather than blank.
-      setPtow(data.est_tow_xml ? (Number(data.est_tow_xml) / 1000).toFixed(1) : "");
+      setOat(""); setQnh(""); setWind(""); setPtow(""); setRelVersion("");
       setTpsResult(null);
       setPrintPageIndex(0);
 
-      // Deliberately NOT pre-filled. The real unit comes up with every entry
-      // field blank (dashes) and the crew fills them in; auto-populating them
-      // hides what has actually been entered vs. assumed. The OFP figures are
-      // available on demand via DATA REQ* (see requestOfpData), which loads
-      // them into the fields as a preview the crew can then edit.
-      setIdentStatus(`OFP LOADED - FLT ${data.flight_number} ${data.origin_iata}-${data.dest_iata}`);
+      setIdentStatus("INIT COMPLETE");
       setIdentStatusErr(false);
       // Stay on INITIALIZE — the crew confirms the fetched data here and
       // navigates on deliberately. Jumping straight to PERF/W&B skipped past
@@ -602,45 +598,65 @@ export default function CduApp() {
       setSimbriefUsername(value);
       return;
     }
-    if (key === "dep") {
-      if (!value || value === DELETE_TOKEN) return { error: "MANDATORY FIELD" };
-      const v = value.toUpperCase();
+    if (key === "dep" || key === "dest") {
+      const setter = key === "dep" ? setDepEntry : setDestEntry;
+      if (value === DELETE_TOKEN) { setter(""); return; }
+      const v = String(value).toUpperCase();
       if (!/^[A-Z]{4}$/.test(v)) return { error: "INVALID ENTRY" };
-      setXmlData(d => (d ? { ...d, origin_icao: v } : d));
+      setter(v);
+      // Keep a loaded plan in step with a corrected station.
+      setXmlData(d => (d ? { ...d, [key === "dep" ? "origin_icao" : "dest_icao"]: v } : d));
       return;
     }
-    if (key === "dest") {
-      if (!value || value === DELETE_TOKEN) return { error: "MANDATORY FIELD" };
-      const v = value.toUpperCase();
-      if (!/^[A-Z]{4}$/.test(v)) return { error: "INVALID ENTRY" };
-      setXmlData(d => (d ? { ...d, dest_icao: v } : d));
+    if (key === "fltno") {
+      if (value === DELETE_TOKEN) { setFltNoEntry(""); return; }
+      if (!/^[A-Za-z0-9]{1,7}$/.test(value)) return { error: "INVALID ENTRY" };
+      setFltNoEntry(String(value).toUpperCase());
+      return;
+    }
+    if (key === "skedday") {
+      if (value === DELETE_TOKEN) { setSkedDay(""); return; }
+      const d = parseInt(value, 10);
+      if (!Number.isFinite(d) || d < 1 || d > 31) return { error: "INVALID ENTRY" };
+      setSkedDay(String(d));
+      return;
+    }
+    if (key === "fuel") {
+      if (value === DELETE_TOKEN) { setFuelQty(""); return; }
+      const lb = parseWeightLb(value);
+      if (lb == null) return { error: "INVALID ENTRY" };
+      setFuelQty(fmtWeightK(lb));
       return;
     }
     if (key === "return") { setPage("PREFLIGHT"); return; }
     if (key === "autoinit") {
+      // CAPT ID supplies the SimBrief credential; DEP and DEST must both be
+      // entered first, as on the real page.
       const u = simbriefUsername.trim();
       if (!u) return { error: "ENTER CAPT ID" };
+      if (!depEntry.trim()) return { error: "ENTER DEP" };
+      if (!destEntry.trim()) return { error: "ENTER DEST" };
       doFetch(u);
       return;
     }
   }
 
+  // Every line here is a crew entry — nothing is filled in by AUTO INIT.
   const identFields = [
-    { key: "flt",    label: "FLT NO",   value: xmlData ? String(xmlData.flight_number) : "", side: "L", editable: false, tone: "green" },
-    { key: "dep",    label: "DEP",      value: xmlData?.origin_icao || "", side: "L", editable: true, tone: "amber", boxes: "0000" },
-    { key: "fuel",   label: "FUEL QTY", value: xmlData?.plan_ramp_xml ? fmtWeightK(Number(xmlData.plan_ramp_xml)) : "", side: "L", editable: false, tone: "green" },
+    { key: "fltno",  label: "FLT NO",   value: fltNoEntry, side: "L", editable: true, tone: "amber", boxes: "0000" },
+    { key: "dep",    label: "DEP",      value: depEntry,   side: "L", editable: true, tone: "amber", boxes: "0000" },
+    { key: "fuel",   label: "FUEL QTY", value: fuelQty,    side: "L", editable: true, tone: "cyan" },
     { key: "captid", label: "CAPT ID",  value: simbriefUsername, side: "L", editable: true, tone: "amber", boxes: "000000" },
     { key: "foid",   label: "F/O ID",   value: "", side: "L", dim: true, dimLabel: "F/O ID" },
     { key: "return", label: "",         value: "<RETURN", side: "L", editable: true, selectable: true, tone: "white" },
-    { key: "skedday",label: "SKED DAY", value: xmlData?.date_day ?? "", side: "R", editable: false, tone: "green" },
-    { key: "dest",   label: "DEST",     value: xmlData?.dest_icao || "", side: "R", editable: true, tone: "amber", boxes: "0000" },
+    { key: "skedday",label: "SKED DAY", value: skedDay,    side: "R", editable: true, tone: "amber", boxes: "00" },
+    { key: "dest",   label: "DEST",     value: destEntry,  side: "R", editable: true, tone: "amber", boxes: "0000" },
     { key: "bdfuel", label: "BD FUEL",  value: "", side: "R", dim: true, dimLabel: "BD FUEL" },
     { key: "crew3",  label: "CREW-3 ID",value: "", side: "R", dim: true, dimLabel: "CREW-3 ID" },
     { key: "crew4",  label: "CREW-4 ID",value: "", side: "R", dim: true, dimLabel: "CREW-4 ID" },
-    // POH p.9-62 LSK 6R — fetches the flight data (no EXEC key on this unit).
+    // POH p.9-62 LSK 6R — sends the downlink request for the flight data.
     { key: "autoinit", label: "DATALINK", value: "AUTO INIT*", side: "R", editable: true, selectable: true, tone: "white" },
-    { key: "xpdr",   label: "XPDR FLT ID", value: xmlData?.flight_number ? String(xmlData.flight_number) : "????????",
-      side: "C", row: 0, editable: false, tone: "green" },
+    { key: "xpdr",   label: "XPDR FLT ID", value: "????????", side: "C", row: 0, editable: false, tone: "green" },
   ];
 
   // ── ACARS T/O CONDITION 1/2 (POH p.9-70/71) ────────────────────────────────
@@ -986,34 +1002,50 @@ export default function CduApp() {
   // length, MRTW/LIM, MTOW, GTOW/CG, ACCEL. One of these per runway result.
   // Same packed-row/tight technique as acarsSummaryFields (see comment
   // above it) — keeps this page from overflowing the fixed-height screen.
+  // Laid out to match the printed AERODATA runway block line for line:
+  //
+  //   KAUS 18L            9000
+  //   DT H175  OAT  26   -0.20
+  //    FLEX - TO1   - ECS ON
+  //   FLEX    MRTW/LIM  V1 129
+  //   40      85.0/A    VR 129
+  //   FLAP      MTOW    V2 134
+  //   2         85.1   VFS 180
+  //   STAB    GTOW/CG    ACCEL
+  //   ---     65.1/25.0   1492
+  //
+  // The three header lines (station/runway/length, departure track + OAT +
+  // slope, and the FLEX/thrust-rating/bleed strip) were missing entirely.
+  // Rendered as full-width monospace text rather than on the LSK grid — this
+  // page is read-only, so column alignment matters more than LSK alignment.
   function buildPerfFields(rd) {
-    return [
-      { key: "flex",  label: "FLEX",     value: String(rd.flex),      side: "L", editable: false, tone: "green" },
-      { key: "rwy",   label: "RUNWAY",   value: `${rd.airport} ${rd.runway}`, side: "C", row: 0, editable: false, tone: "green" },
-      { key: "v1",    label: "V1",       value: String(rd.v1),        side: "R", editable: false, tone: "green" },
-      // FLAP/THR headings follow the aircraft type, same rules the printed
-      // AERODATA report uses (Airbus = CONF, MD-83 = EPR, 737 = N1), and the
-      // ERJ family carries an extra V215 column. The backend sends the
-      // resolved labels so the two outputs can't drift apart.
-      { key: "flap",  label: rd.flap_label || "FLAP", value: String(rd.flaps), side: "L", editable: false, tone: "green" },
-      { key: "len",   label: "LENGTH",   value: `${rd.length}FT`,     side: "C", row: 1, editable: false, tone: "green" },
-      { key: "vr",    label: "VR",       value: String(rd.vr),        side: "R", editable: false, tone: "green" },
-      { key: "stab",  label: "STAB",     value: String(rd.trim_stab), side: "L", editable: false, tone: "green" },
-      { key: "mrtw",  label: "MRTW/LIM", value: String(rd.mrtw),      side: "C", row: 2, editable: false, tone: "green" },
-      { key: "v2",    label: "V2",       value: String(rd.v2),        side: "R", editable: false, tone: "green" },
-      { key: "mtow",  label: "MTOW",     value: String(rd.mtow),      side: "L", editable: false, tone: "green" },
-      { key: "accel", label: "ACCEL",    value: String(rd.acc_alt),   side: "C", row: 3, editable: false, tone: "green" },
-      { key: "vfs",   label: String(rd.vfs_label || "VFS"), value: rd.vfs != null ? String(rd.vfs) : "---", side: "R", editable: false, tone: "green" },
-      { key: "gtow",  label: "GTOW/CG",  value: String(rd.gtow_cg),   side: "L", editable: false, tone: "green" },
-      // ERJ-only extra speed column, and the type-specific thrust reading
-      // (EPR / N1 / THR) when the backend computed one.
-      ...(rd.is_erj && rd.v215 != null
-        ? [{ key: "v215", label: "V215", value: String(rd.v215), side: "C", row: 4, editable: false, tone: "green" }]
-        : []),
-      ...(rd.n1
-        ? [{ key: "thr", label: rd.thr_label || "THR", value: String(rd.n1), side: "R", editable: false, tone: "green" }]
-        : []),
+    const pad = (s, n) => String(s ?? "").padEnd(n);
+    const lpad = (s, n) => String(s ?? "").padStart(n);
+    const flapLbl = rd.flap_label || "FLAP";
+    const vfsLbl = rd.vfs_label || "VFS";
+    const vfs = rd.vfs != null ? String(rd.vfs) : "---";
+    const slope = rd.slope != null && rd.slope !== "" ? Number(rd.slope).toFixed(2) : "----";
+    const thrRating = rd.thr || "TO1";
+    const bleedStrip = ` FLEX - ${pad(thrRating, 5)} - ${rd.third_col_label || "BLD"} ${rd.bleed || "ON"}`;
+
+    const lines = [
+      `${pad(`${rd.airport} ${rd.runway}`, 16)}${lpad(rd.length, 8)}`,
+      `DT H${lpad(String(rd.mc ?? "").padStart(3, "0"), 3)}  OAT ${lpad(rd.oat, 3)}   ${lpad(slope, 5)}`,
+      bleedStrip,
+      `FLEX    ${pad("MRTW/LIM", 10)}V1 ${lpad(rd.v1, 3)}`,
+      `${pad(rd.flex, 8)}${pad(rd.mrtw, 10)}VR ${lpad(rd.vr, 3)}`,
+      `${pad(flapLbl, 10)}${pad("MTOW", 8)}V2 ${lpad(rd.v2, 3)}`,
+      `${pad(rd.flaps, 10)}${pad(rd.mtow, 7)}${lpad(vfsLbl, 4)} ${lpad(vfs, 3)}`,
+      `STAB    ${pad("GTOW/CG", 11)}ACCEL`,
+      `${pad(rd.trim_stab, 8)}${pad(rd.gtow_cg, 11)}${lpad(rd.acc_alt, 5)}`,
+      // ERJ family carries an extra V2+15 column the other types don't.
+      ...(rd.is_erj && rd.v215 != null ? [`V215 ${rd.v215}`] : []),
     ];
+
+    return lines.map((l, i) => ({
+      key: `pl${i}`, label: "", value: l || " ",
+      side: "C", editable: false, tone: "green", small: true, wide: true,
+    }));
   }
 
   const perfPages = runwayResults.length
