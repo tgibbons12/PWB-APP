@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import CduEmulator, { DELETE_TOKEN } from "./CduEmulator.jsx";
+import { calculateLanding, toEjetAcType, pressureAltitude, RWYCC_OPTIONS } from "../landing/index.js";
 import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } from "./api.js";
 
 // ─── PWB: STANDALONE MCDU EMULATOR ──────────────────────────────────────────
@@ -177,6 +178,28 @@ export default function CduApp() {
   const [destEntry, setDestEntry] = useState("");
   const [fuelQty, setFuelQty] = useState("");
 
+  // ── ACARS LANDING (see LANDING_PERF_DESIGN.md) ────────────────────────────
+  // The POH documents the landing pages only as LSK targets on PERF/W&B
+  // (1R/3R) — there are no screenshots of them, so this layout mirrors the
+  // takeoff conditions page rather than copying a documented one.
+  const [ldgRwy1, setLdgRwy1] = useState("");
+  const [ldgRwy2, setLdgRwy2] = useState("");
+  const [ldgRwy3, setLdgRwy3] = useState("");
+  const [ldgOat, setLdgOat] = useState("");
+  const [ldgQnh, setLdgQnh] = useState("");
+  const [ldgWind, setLdgWind] = useState("");
+  // Landing weight is NOT entered directly — the real tool takes ZFW and
+  // arrival fuel and derives LDW from them, which is how the crew actually
+  // knows it. LDW is a computed green readout, never an entry.
+  const [ldgZfw, setLdgZfw] = useState("");
+  const [arrFuel, setArrFuel] = useState("");
+  const [ldgFlap, setLdgFlap] = useState("Full");
+  const [ldgRev, setLdgRev] = useState("Both");
+  const [rwycc, setRwycc] = useState("");       // TALPA RCAM code — never inferred
+  const [ldgVappAdd, setLdgVappAdd] = useState("5");
+  const [ldgResults, setLdgResults] = useState(null);
+  const [ldgPageIndex, setLdgPageIndex] = useState(0);
+
   // ACARS LOADSHEET (ERJ-170 POH ch.9 sec.16 p.9-73/74) — "AD/CH" is
   // adults/children per cabin section, "BAG/WT" is bag count / freight
   // weight per hold. Stored as raw "a/b" strings exactly as typed, and
@@ -242,6 +265,11 @@ export default function CduApp() {
     setAdChA(""); setAdChB(""); setAdChC(""); setBagFwd(""); setBagAft("");
     setFaAcm("2/0"); setCloset("65"); setToFuel(""); setBlstFuel("");
     setPaxWtA(""); setPaxWtB(""); setPaxWtC(""); setCgPercent("25.0");
+    setLdgRwy1(""); setLdgRwy2(""); setLdgRwy3("");
+    setLdgOat(""); setLdgQnh(""); setLdgWind(""); setRwycc("");
+    setLdgZfw(""); setArrFuel("");
+    setLdgFlap("Full"); setLdgRev("Both"); setLdgVappAdd("5");
+    setLdgResults(null); setLdgPageIndex(0);
     setTpsResult(null); setAcarsPageIndex(0); setPrintPageIndex(0);
     setUplinkMsg(null); setUplinkBusy(false);
   }
@@ -363,6 +391,12 @@ export default function CduApp() {
       return;
     }
     if (key === "acarsmenu") { setPage("ACARSMENU"); return; }
+    if (key === "ldgconditions") { setPage("LANDCOND"); return; }
+    if (key === "ldgrwydata") {
+      if (!ldgResults) return { error: "NO LANDING DATA" };
+      setLdgPageIndex(0); setPage("LANDDATA");
+      return;
+    }
     // DATA REQ* here is scoped to ROUTE data only — the flight's identity and
     // planned weight. Conditions and loadsheet each have their own request on
     // their own page, so one button no longer overwrites everything at once.
@@ -385,9 +419,14 @@ export default function CduApp() {
     { key: "_p1",          label: "",           value: "",             side: "L", editable: false },
     { key: "_p2",          label: "",           value: "",             side: "L", editable: false },
     { key: "acarsmenu",    label: "RETURN TO",  value: "<ACARS MENU", side: "L", editable: true, selectable: true, tone: "white" },
-    { key: "ldgconditions",label: "LANDING",    value: "CONDITIONS>", side: "R", dim: true, dimLabel: "LANDING COND" },
+    // Both live now — landing performance comes from the naclandapp tables
+    // (see LANDING_PERF_DESIGN.md). Greyed only when the OFP carries no
+    // landing block at all.
+    { key: "ldgconditions",label: "LANDING",    value: "CONDITIONS>", side: "R",
+      editable: !!ldgData, selectable: true, tone: "white", dim: !ldgData, dimLabel: "LANDING COND" },
     { key: "_p3",          label: "",           value: "",             side: "R", editable: false },
-    { key: "ldgrwydata",   label: "LANDING",    value: "RWY DATA>",   side: "R", dim: true, dimLabel: "LANDING RWY DATA" },
+    { key: "ldgrwydata",   label: "LANDING",    value: "RWY DATA>",   side: "R",
+      editable: !!ldgData, selectable: true, tone: "white", dim: !ldgData, dimLabel: "LANDING RWY DATA" },
     { key: "_p4",          label: "",           value: "",             side: "R", editable: false },
     { key: "_p5",          label: "",           value: "",             side: "R", editable: false },
     // 6R is "Reserved for future use" on the real page (POH p.9-69) — the
@@ -545,6 +584,247 @@ export default function CduApp() {
       value: String(sumPair(adChA) + sumPair(adChB) + sumPair(adChC)),
       side: "C", row: 1, editable: false, tone: "green" },
   ];
+
+  // ── ACARS LANDING CONDITIONS ──────────────────────────────────────────────
+  const ldgData = xmlData?.landing ?? null;
+  const ldgRunwayIds = (ldgData?.runways ?? []).map(r => r.id);
+  const destIcao = ldgData?.airport || xmlData?.dest_icao || "----";
+  // LDW = ZFW + arrival fuel, in pounds. Derived, never entered.
+  const ldwLb = (() => {
+    const z = parseFloat(ldgZfw), f = parseFloat(arrFuel);
+    if (!Number.isFinite(z) || !Number.isFinite(f)) return null;
+    return Math.round(z * 1000 + f * 1000);
+  })();
+  const ldgReady = !!(
+    [ldgRwy1, ldgRwy2, ldgRwy3].some(r => r.trim()) &&
+    String(ldgWind).trim() && String(ldgOat).trim() && String(ldgQnh).trim() &&
+    ldwLb != null && String(rwycc).trim()
+  );
+
+  function cycleLdgRwy(current, setter) {
+    const opts = ["", ...ldgRunwayIds];
+    setter(opts[(opts.indexOf(current) + 1) % opts.length]);
+  }
+
+  // Runs naclandapp's certified-table calculation for each requested runway.
+  // Purely local — no datalink involved, so no artificial delay here.
+  function computeLanding() {
+    if (!ldgData) return { text: "NO LANDING DATA", error: true };
+    const acType = toEjetAcType(xmlData?.icaocode, xmlData?.base_type);
+    const wtLb = ldwLb ?? 0;
+    const ids = [ldgRwy1, ldgRwy2, ldgRwy3].map(r => r.trim().toUpperCase()).filter(Boolean);
+    const out = [];
+    for (const id of ids) {
+      const rwy = (ldgData.runways ?? []).find(r => r.id === id);
+      if (!rwy) continue;
+      const res = calculateLanding({
+        acType,
+        landingWeight: wtLb,
+        flap: ldgFlap,
+        reversers: ldgRev,
+        vappAdd: parseFloat(ldgVappAdd) || 0,
+        pressureAlt: pressureAltitude(rwy.elevation, ldgQnh),
+        oatC: parseFloat(ldgOat) || 0,
+        // SimBrief gives the headwind component per runway directly, which is
+        // more accurate than re-deriving it from the wind entry.
+        headwind: Number(rwy.headwind) || 0,
+        brakingAction: parseInt(rwycc, 10) || 6,
+        slopePct: Number(rwy.gradient) || 0,
+      });
+      out.push({ rwy, acType, result: res, weightLb: wtLb });
+    }
+    if (!out.length) return { text: "NO RUNWAY MATCH", error: true };
+    setLdgResults(out);
+    setLdgPageIndex(0);
+    setPage("LANDDATA");
+    return { text: "LANDING DATA AVAIL", error: false };
+  }
+
+  function handleLdgCondCommit(key, value) {
+    if (key === "perfwb") { setPage("PERFWB"); return; }
+    if (key === "ldgrwy1" || key === "ldgrwy2" || key === "ldgrwy3") {
+      const setter = key === "ldgrwy1" ? setLdgRwy1 : key === "ldgrwy2" ? setLdgRwy2 : setLdgRwy3;
+      const cur = key === "ldgrwy1" ? ldgRwy1 : key === "ldgrwy2" ? ldgRwy2 : ldgRwy3;
+      if (value === null) { cycleLdgRwy(cur, setter); return; }
+      if (value === DELETE_TOKEN) { setter(""); return; }
+      const v = String(value).toUpperCase();
+      if (!ldgRunwayIds.includes(v)) return { error: "INVALID ENTRY" };
+      setter(v);
+      return;
+    }
+    if (key === "rwycc") {
+      // TALPA RCAM code. NEVER inferred from SimBrief's surface_condition —
+      // the code comes from the airport operator, and guessing it would be
+      // inventing safety-relevant data. Cycles 6..1, blank until chosen.
+      if (value === null) {
+        const codes = RWYCC_OPTIONS.map(o => String(o.value));
+        const i = codes.indexOf(String(rwycc));
+        setRwycc(codes[(i + 1) % codes.length]);
+        return;
+      }
+      if (value === DELETE_TOKEN) { setRwycc(""); return; }
+      const n = parseInt(value, 10);
+      if (!RWYCC_OPTIONS.some(o => o.value === n)) return { error: "INVALID ENTRY" };
+      setRwycc(String(n));
+      return;
+    }
+    if (key === "ldgflap") {
+      if (value === null) { setLdgFlap(f => (f === "Full" ? "5" : "Full")); return; }
+      const v = String(value).toUpperCase();
+      if (v === "FULL") setLdgFlap("Full");
+      else if (v === "5") setLdgFlap("5");
+      else return { error: "INVALID ENTRY" };
+      return;
+    }
+    if (key === "ldgrev") {
+      if (value === null) { setLdgRev(r => (r === "Both" ? "None" : "Both")); return; }
+      const v = String(value).toUpperCase();
+      if (v === "BOTH") setLdgRev("Both");
+      else if (v === "NONE") setLdgRev("None");
+      else return { error: "INVALID ENTRY" };
+      return;
+    }
+    if (key === "ldgwind") { setLdgWind(value === DELETE_TOKEN ? "" : value); return; }
+    if (key === "ldgzfw" || key === "arrfuel") {
+      const setter = key === "ldgzfw" ? setLdgZfw : setArrFuel;
+      if (value === DELETE_TOKEN) { setter(""); return; }
+      const lb = parseWeightLb(value);
+      if (lb == null) return { error: "INVALID ENTRY" };
+      setter(fmtWeightK(lb));
+      return;
+    }
+    if (key === "ldgoatqnh") {
+      if (value === DELETE_TOKEN) { setLdgOat(""); setLdgQnh(""); return; }
+      const [o, q] = String(value).split("/");
+      if (o === undefined || q === undefined) return { error: "INVALID ENTRY" };
+      if (!/^-?\d{1,3}$/.test(o.trim())) return { error: "INVALID ENTRY" };
+      const qt = q.trim();
+      let qOut;
+      if (/^\d{2}\.\d{1,2}$/.test(qt)) qOut = qt;
+      else if (/^\d{4}$/.test(qt) && /^[23]/.test(qt)) qOut = `${qt.slice(0, 2)}.${qt.slice(2)}`;
+      else if (/^\d{3,4}$/.test(qt)) qOut = qt;
+      else return { error: "INVALID ENTRY" };
+      setLdgOat(o.trim()); setLdgQnh(qOut);
+      return;
+    }
+    if (key === "ldgdata") {
+      if (!ldgResults) return { error: "PRESS COMPUTE FIRST" };
+      setLdgPageIndex(0); setPage("LANDDATA");
+      return;
+    }
+    if (key === "compute") {
+      if (!ldgReady) {
+        // Pull what the OFP already knows; RwyCC stays blank on purpose.
+        if (!ldgData) return { error: "NO FLIGHT PLAN" };
+        if (!ldgRwy1 && ldgData.planned_runway) setLdgRwy1(ldgData.planned_runway);
+        if (!String(ldgWind).trim() && ldgData.wind_direction != null)
+          setLdgWind(`${String(Math.round(ldgData.wind_direction)).padStart(3, "0")}/${Math.round(ldgData.wind_speed || 0)}`);
+        if (!String(ldgOat).trim() && ldgData.temperature != null) setLdgOat(String(Math.round(ldgData.temperature)));
+        if (!String(ldgQnh).trim() && ldgData.altimeter) setLdgQnh(ldgData.altimeter);
+        // Seed ZFW from the OFP and back out arrival fuel from its planned
+        // landing weight, so the derived LDW matches what SimBrief planned.
+        const ofpZfw = Number(xmlData?.est_zfw_xml) || 0;
+        if (!String(ldgZfw).trim() && ofpZfw) setLdgZfw(fmtWeightK(ofpZfw));
+        if (!String(arrFuel).trim() && ldgData.planned_weight && ofpZfw) {
+          const f = Number(ldgData.planned_weight) - ofpZfw;
+          if (f > 0) setArrFuel(fmtWeightK(f));
+        }
+        return { error: "LDG DATA LOADED - SET RWYCC" };
+      }
+      return computeLanding();
+    }
+  }
+
+  const ldgCondFields = ldgData ? [
+    { key: "ldgrwy1", label: `${destIcao} RWY 1`, value: ldgRwy1, side: "L", editable: true, cyclable: true, tone: "amber", boxes: "000" },
+    { key: "ldgrwy2", label: `${destIcao} RWY 2`, value: ldgRwy2, side: "L", editable: true, cyclable: true, tone: "cyan" },
+    { key: "ldgrwy3", label: `${destIcao} RWY 3`, value: ldgRwy3, side: "L", editable: true, cyclable: true, tone: "cyan" },
+    { key: "rwycc",   label: "RWYCC",   value: rwycc ? `${rwycc} ${(RWYCC_OPTIONS.find(o => String(o.value) === rwycc)?.label || "").split(" - ")[1] || ""}`.trim() : "",
+      side: "L", editable: true, cyclable: true, tone: "amber", boxes: "0" },
+    { key: "ldgflap", label: "FLAP",    value: ldgFlap, side: "L", editable: true, cyclable: true, tone: "cyan" },
+    { key: "perfwb",  label: "",        value: "<PERF/W&B", side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "ldgwind", label: "WIND",    value: String(ldgWind), side: "R", editable: true, tone: "amber", boxes: "000/00" },
+    { key: "ldgoatqnh", label: "OAT/QNH", value: ldgOat || ldgQnh ? `${ldgOat}/${ldgQnh}` : "", side: "R", editable: true, tone: "amber", boxes: "000/00.00" },
+    { key: "ldgzfw",  label: "ZFW",      value: ldgZfw,  side: "R", editable: true, tone: "amber", boxes: "000.0" },
+    { key: "arrfuel", label: "ARR FUEL", value: arrFuel, side: "R", editable: true, tone: "amber", boxes: "00.0" },
+    // LDW is derived (ZFW + ARR FUEL) and shown green as an output, matching
+    // the real tool — it is never an entry field.
+    { key: "ldw",     label: "LDW",      value: ldwLb != null ? fmtWeightK(ldwLb) : "", side: "R", editable: false, tone: "green" },
+    { key: "compute", label: "",        value: ldgReady ? "COMPUTE>" : "REQUEST*",
+      side: "R", editable: true, selectable: true, tone: ldgReady ? "white" : "amber" },
+  ] : [];
+
+  // ── ACARS LDG CONDITIONS 2/2 — config that doesn't fit on 1/2 ─────────────
+  // The real tool's page reads "1/2", so a second page is where the remaining
+  // configuration belongs. REVERSERS materially changes landing distance, so
+  // it stays an explicit crew selection rather than a hidden default.
+  function handleLdgCond2Commit(key, value) {
+    if (key === "perfwb") { setPage("PERFWB"); return; }
+    if (key === "ldgrev") {
+      if (value === null) { setLdgRev(r => (r === "Both" ? "None" : "Both")); return; }
+      const v = String(value).toUpperCase();
+      if (v === "BOTH") setLdgRev("Both");
+      else if (v === "NONE") setLdgRev("None");
+      else return { error: "INVALID ENTRY" };
+      return;
+    }
+    if (key === "vappadd") {
+      if (value === DELETE_TOKEN) { setLdgVappAdd("5"); return; }
+      const n = parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 0 || n > 30) return { error: "INVALID ENTRY" };
+      setLdgVappAdd(String(n));
+      return;
+    }
+  }
+
+  const ldgCond2Fields = ldgData ? [
+    { key: "ldgrev",  label: "REVERSERS",   value: ldgRev,     side: "L", editable: true, cyclable: true, tone: "cyan" },
+    { key: "vappadd", label: "VAPP = VREF+", value: ldgVappAdd, side: "L", editable: true, tone: "cyan" },
+    { key: "_l1",     label: "",            value: "",          side: "L", editable: false },
+    { key: "_l2",     label: "",            value: "",          side: "L", editable: false },
+    { key: "_l3",     label: "",            value: "",          side: "L", editable: false },
+    { key: "perfwb",  label: "",            value: "<PERF/W&B", side: "L", editable: true, selectable: true, tone: "white" },
+  ] : [];
+
+  // ── ACARS LANDING RWY DATA — one page per requested runway ────────────────
+  function buildLdgFields(entry) {
+    const { rwy, result, weightLb } = entry;
+    const sp = result?.speeds ?? {};
+    const dist = result?.primaryDist;
+    const lda = Number(rwy.lda) || 0;
+    // Margin is the number that actually matters: required distance against
+    // the landing distance available.
+    const margin = dist != null && lda ? Math.round(lda - dist) : null;
+    const overrun = margin != null && margin < 0;
+    // SimBrief's own max landing weight for this runway, dry or wet by RwyCC.
+    const maxWt = (parseInt(rwycc, 10) || 6) >= 5 ? rwy.max_weight_dry : rwy.max_weight_wet;
+    const overWeight = maxWt && weightLb > Number(maxWt);
+    return [
+      { key: "hdr", label: "RUNWAY / LDA", value: `${destIcao} ${rwy.id}   ${Math.round(lda)}FT`,
+        side: "C", row: 0, span: true, editable: false, tone: "green" },
+      { key: "cond", label: `RWYCC ${rwycc || "-"}   FLAP ${ldgFlap}`,
+        value: `REV ${ldgRev.toUpperCase()}   ${Number(rwy.gradient) >= 0 ? "UP" : "DN"} ${Math.abs(Number(rwy.gradient) || 0).toFixed(2)}`,
+        side: "C", row: 1, span: true, editable: false, tone: "green" },
+      { key: "vref", label: "VREF", value: sp.vref != null ? String(sp.vref) : "---", side: "L", row: 2, editable: false, tone: "green" },
+      { key: "ldr",  label: "LDR",  value: dist != null ? `${dist.toLocaleString()}FT` : "----", side: "C", row: 2, editable: false, tone: "green" },
+      { key: "vapp", label: "VAPP", value: sp.vapp != null ? String(sp.vapp) : "---", side: "R", row: 2, editable: false, tone: "green" },
+      { key: "vac",  label: "VAC",  value: sp.vac != null ? String(sp.vac) : "---", side: "L", row: 3, editable: false, tone: "green" },
+      { key: "margin", label: overrun ? "*** LDA EXCEEDED ***" : "MARGIN",
+        value: margin != null ? `${margin >= 0 ? "+" : ""}${margin.toLocaleString()}FT` : "----",
+        side: "C", row: 3, editable: false, tone: overrun ? "amber" : "green", error: overrun },
+      { key: "vfs",  label: "VFS",  value: sp.vfs != null ? String(sp.vfs) : "---", side: "R", row: 3, editable: false, tone: "green" },
+      { key: "lw",   label: overWeight ? "*** OVER MAX LW ***" : "LW / MAX",
+        value: `${fmtWeightK(weightLb)}/${maxWt ? fmtWeightK(Number(maxWt)) : "--"}`,
+        side: "C", row: 4, span: true, editable: false, tone: overWeight ? "amber" : "green", error: overWeight },
+      // SimBrief's own planned figure, shown as a cross-check rather than an
+      // answer — it's computed for ITS planned weight and conditions only.
+      { key: "ofp", label: "OFP PLANNED (CHECK)",
+        value: `VREF ${Math.round(ldgData?.distance_dry?.vref || 0) || "---"}  ${Math.round(ldgData?.distance_dry?.factored_distance || 0).toLocaleString()}FT`,
+        side: "C", row: 5, span: true, editable: false, tone: "green", small: true },
+    ];
+  }
+
+  const ldgPages = (ldgResults ?? []).map(e => ({ title: "ACARS LDG RWY DATA", fields: buildLdgFields(e) }));
 
   // ── ACARS PAX DETAIL — LOADSHEET page 2/2 (POH p.9-75) ─────────────────────
   function handlePaxDetailCommit(key, value) {
@@ -1297,6 +1577,41 @@ export default function CduApp() {
       execAvailable: false, // no EXEC key on this unit — send is LSK 6R SEND*
       onPrev: () => setPage("PERFWB"),
       onNext: () => setPage("PAXDETAIL"), // 1/2 -> 2/2
+      onDlk: () => setPage("ACARSMENU"),
+    };
+  } else if (page === "LANDCOND") {
+    cduProps = {
+      title: "ACARS LD CONDITIONS", pageNum: "1/2",
+      fields: ldgCondFields,
+      onFieldCommit: handleLdgCondCommit,
+      execAvailable: false,
+      onPrev: () => setPage("PERFWB"),
+      onNext: () => setPage("LANDCOND2"),
+      onDlk: () => setPage("ACARSMENU"),
+    };
+  } else if (page === "LANDCOND2") {
+    cduProps = {
+      title: "ACARS LD CONDITIONS", pageNum: "2/2",
+      fields: ldgCond2Fields,
+      onFieldCommit: handleLdgCond2Commit,
+      execAvailable: false,
+      onPrev: () => setPage("LANDCOND"),
+      onNext: () => setPage("LANDCOND"),
+      onDlk: () => setPage("ACARSMENU"),
+    };
+  } else if (page === "LANDDATA") {
+    const cur = ldgPages[ldgPageIndex] ?? { title: "ACARS LDG RWY DATA", fields: [] };
+    cduProps = {
+      title: cur.title,
+      pageNum: ldgPages.length ? `${ldgPageIndex + 1}/${ldgPages.length}` : "",
+      fields: cur.fields,
+      onFieldCommit: () => {},
+      execAvailable: false,
+      onPrev: () => {
+        if (ldgPageIndex > 0) setLdgPageIndex(i => i - 1);
+        else setPage("LANDCOND");
+      },
+      onNext: () => ldgPages.length && setLdgPageIndex(i => (i + 1) % ldgPages.length),
       onDlk: () => setPage("ACARSMENU"),
     };
   } else if (page === "PAXDETAIL") {
