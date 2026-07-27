@@ -281,6 +281,31 @@ export default function CduApp() {
       return;
     }
     if (key === "acarsmenu") { setPage("ACARSMENU"); return; }
+    if (key === "datareq") {
+      if (!xmlData) return { error: "NO FLIGHT PLAN" };
+      // Loads the OFP's planned figures into every blank entry field across
+      // the conditions and loadsheet pages, as an editable starting point.
+      // Section split mirrors the backend's own (25% fwd / 75% aft); cargo is
+      // split 50/50 because the OFP carries only a single total.
+      setOat(xmlData.temp ?? "");
+      setQnh(xmlData.qnh ?? "");
+      setWind(xmlData.wind ?? "");
+      setPtow(xmlData.est_tow_xml ? (Number(xmlData.est_tow_xml) / 1000).toFixed(1) : "");
+      if (!runway1 && xmlData.plan_rwy && runwayIds.includes(xmlData.plan_rwy)) setRunway1(xmlData.plan_rwy);
+
+      const paxTotal = Number(xmlData.pax_count_xml) || 0;
+      const cargoTotal = Number(xmlData.cargo_xml) || 0;
+      const fwdPax = Math.round(paxTotal * 0.25);
+      setAdChA(`${fwdPax}/0`);
+      setAdChB(`${paxTotal - fwdPax}/0`);
+      setAdChC("0/0");
+      setBagFwd(`0/${Math.round(cargoTotal / 2)}`);
+      setBagAft(`0/${cargoTotal - Math.round(cargoTotal / 2)}`);
+      setFaAcm("0/1/1");
+      setCloset("65");
+      setToFuel(String(xmlData.plan_ramp_xml ?? ""));
+      return { error: "OFP DATA LOADED" };
+    }
   }
 
   const perfWbFields = [
@@ -293,6 +318,14 @@ export default function CduApp() {
     { key: "ldgconditions",label: "LANDING",    value: "CONDITIONS>", side: "R", dim: true, dimLabel: "LANDING COND" },
     { key: "_p3",          label: "",           value: "",             side: "R", editable: false },
     { key: "ldgrwydata",   label: "LANDING",    value: "RWY DATA>",   side: "R", dim: true, dimLabel: "LANDING RWY DATA" },
+    { key: "_p4",          label: "",           value: "",             side: "R", editable: false },
+    { key: "_p5",          label: "",           value: "",             side: "R", editable: false },
+    // 6R is "Reserved for future use" on the real page (POH p.9-69) — the
+    // natural home for DATA REQ*, which pre-loads BOTH the conditions and
+    // loadsheet pages from the OFP in one press. It can't live on those pages
+    // themselves: every one of their twelve LSKs is already taken, and the
+    // middle column has no key next to it.
+    { key: "datareq",      label: "",           value: "DATA REQ*",   side: "R", editable: true, selectable: true, tone: "white" },
   ];
 
   // ── ACARS LOADSHEET (POH p.9-73/74) ────────────────────────────────────────
@@ -329,25 +362,6 @@ export default function CduApp() {
       setAcarsPageIndex(0); setPage("ACARS");
       return;
     }
-    if (key === "datareq") {
-      if (!xmlData) return { error: "NO FLIGHT PLAN" };
-      // Pull the OFP's planned figures into the blank fields as a preview.
-      // Section split mirrors the backend's own (25% fwd / 75% aft); cargo is
-      // split 50/50 because the OFP only carries a single total. Everything
-      // stays editable — this is a starting point, not a commitment.
-      const paxTotal = Number(xmlData.pax_count_xml) || 0;
-      const cargoTotal = Number(xmlData.cargo_xml) || 0;
-      const fwdPax = Math.round(paxTotal * 0.25);
-      setAdChA(`${fwdPax}/0`);
-      setAdChB(`${paxTotal - fwdPax}/0`);
-      setAdChC("0/0");
-      setBagFwd(`0/${Math.round(cargoTotal / 2)}`);
-      setBagAft(`0/${cargoTotal - Math.round(cargoTotal / 2)}`);
-      setFaAcm("0/1/1");
-      setCloset("65");
-      setToFuel(String(xmlData.plan_ramp_xml ?? ""));
-      return { error: "OFP DATA LOADED" };
-    }
     const setters = {
       adcha: setAdChA, adchb: setAdChB, adchc: setAdChC,
       bagfwd: setBagFwd, bagaft: setBagAft,
@@ -376,7 +390,6 @@ export default function CduApp() {
     { key: "blstfuel",label: "BLST FUEL",    value: blstFuel,side: "R", editable: true, tone: "cyan" },
     { key: "torwydata", label: "T/O",        value: "DATA>", side: "R", editable: true, selectable: true, tone: "white" },
     { key: "send",      label: "",           value: "SEND",  side: "R", editable: true, selectable: true, tone: "white" },
-    { key: "datareq", label: "", value: "DATA REQ*", side: "C", row: 0, editable: true, selectable: true, tone: "white" },
     { key: "ttlpax",  label: "TTL PAX",
       value: String(sumPair(adChA) + sumPair(adChB) + sumPair(adChC)),
       side: "C", row: 1, editable: false, tone: "green" },
@@ -582,16 +595,6 @@ export default function CduApp() {
       setPtow(value);
       return;
     }
-    if (key === "datareq") {
-      if (!xmlData) return { error: "NO FLIGHT PLAN" };
-      // Loads the OFP's planned conditions into the blank fields as a
-      // preview; all of it stays editable.
-      setOat(xmlData.temp ?? ""); setQnh(xmlData.qnh ?? "");
-      setWind(xmlData.wind ?? "");
-      setPtow(xmlData.est_tow_xml ? (Number(xmlData.est_tow_xml) / 1000).toFixed(1) : "");
-      if (!runway1 && xmlData.plan_rwy && runwayIds.includes(xmlData.plan_rwy)) setRunway1(xmlData.plan_rwy);
-      return { error: "OFP DATA LOADED" };
-    }
     if (key === "oatqnh") {
       if (value === DELETE_TOKEN) return { error: "NOT ALLOWED" }; // required field
       const [o, q] = value.split("/");
@@ -625,7 +628,6 @@ export default function CduApp() {
     { key: "gotols",   label: "W&B",      value: "LOADSHEET>",      side: "R", editable: true, selectable: true, tone: "white" },
     { key: "gotodata", label: "T/O",      value: "DATA>",           side: "R", editable: true, selectable: true, tone: "white" },
     { key: "send",     label: "",         value: "SEND",            side: "R", editable: true, selectable: true, tone: "white" },
-    { key: "datareq",  label: "",         value: "DATA REQ*",       side: "C", row: 0, editable: true, selectable: true, tone: "white" },
   ] : [];
 
   // ── ACARS T/O CONDITION 2/2 — FLAP, ANTI-ICE, THRUST, RLS VERSION ─────────
