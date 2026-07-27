@@ -133,12 +133,16 @@ function CduPackLine({ pack, tight }) {
 
 // Left/right LSK row y-centers as % of the whole chassis image height —
 // eyeballed from the image, evenly spaced starting just below the screen.
-const LSK_ROW_Y = [14.8, 20.3, 25.7, 31.1, 36.5, 42.0];
+const LSK_ROW_Y = [15.1, 20.4, 25.8, 31.2, 36.6, 43.0];
 
 // Function-key rows (PERF..CB / MENU..RADIO) and the BRT/DIM stack, in the
 // same percent-of-chassis space as the keypad grid below — measured off the
 // WebFMC reference screenshots, whose row pitch matches ALPHA_ROW_Y's.
-const FUNC_ROW_Y = [54.0, 60.8];
+// Re-measured from the hotspot-overlay screenshots: every keypad and
+// function-key target was sitting ~2.5-3% high, straddling the top edge of
+// its button. The screen rect (a known 6.1%/41.1% box) was used as the
+// reference to convert screenshot pixels back into chassis percentages.
+const FUNC_ROW_Y = [56.5, 62.5];
 const FUNC_COL_X = [8.0, 19.9, 31.7, 43.7, 55.6, 67.6, 79.4];
 // BRT/DIM sit in their own tighter stack, not on the two function rows.
 const BRT_DIM_X = 93.1;
@@ -160,7 +164,7 @@ const ROW_Y_IN_SCREEN = LSK_ROW_Y.map(
 );
 
 // Alpha/numeric keypad grid — also eyeballed as % of chassis width/height.
-const ALPHA_ROW_Y = [68.2, 74.7, 81.3, 87.8, 94.4];
+const ALPHA_ROW_Y = [70.6, 77.2, 83.8, 90.4, 97.0];
 const ALPHA_COL_X = [6.5, 16.3, 26.1, 35.9, 45.7, 55.5];
 const NUM_COL_X = [66.9, 75.9, 84.8, 93.7];
 
@@ -301,10 +305,32 @@ export default function CduEmulator({
   const ROW_COUNT = 6;
   const rowedCenter = centerFields.filter(f => Number.isInteger(f.row));
   const looseCenter = centerFields.filter(f => !Number.isInteger(f.row));
+
+  // Left/right fields honour an explicit `row` too, not just their position
+  // in the array. Without this a page that reserves rows 0-1 for full-width
+  // header text still had its first L/R field land on row 0, colliding with
+  // the header and squeezing it back into a third of the width.
+  function placeSide(fields) {
+    const slots = new Array(ROW_COUNT).fill(undefined);
+    const rest = [];
+    for (const f of fields) {
+      if (Number.isInteger(f.row) && f.row < ROW_COUNT && !slots[f.row]) slots[f.row] = f;
+      else rest.push(f);
+    }
+    let next = 0;
+    for (const f of rest) {
+      while (next < ROW_COUNT && slots[next]) next++;
+      if (next >= ROW_COUNT) break;
+      slots[next++] = f;
+    }
+    return slots;
+  }
+  const leftSlots = placeSide(leftFields);
+  const rightSlots = placeSide(rightFields);
   const gridRows = Array.from({ length: ROW_COUNT }, (_, i) => ({
-    L: leftFields[i],
+    L: leftSlots[i],
     C: rowedCenter.find(f => f.row === i),
-    R: rightFields[i],
+    R: rightSlots[i],
   }));
   const renderCell = (f, side) => f
     ? <CduLine key={f.key} label={f.label} value={f.value} side={side} editable={f.editable}

@@ -1065,11 +1065,9 @@ export default function CduApp() {
   const acarsRemarksFields = loadsheetSummary ? (() => {
     const lines = (loadsheetSummary.remarks ?? []).filter(rl => String(rl).trim());
     return [
-      { key: "hdr", label: "REMARKS", value: " ", side: "L", editable: false, tone: "green" },
-      // Full-width centre lines — remark text is longer than a third of the
-      // screen and was being clipped in the left column.
-      ...lines.slice(0, 8).map((rl, i) => ({
-        key: `rl${i}`, label: "", value: rl, side: "C", editable: false, tone: "green", small: true, wide: true,
+      { key: "hdr", label: "", value: "REMARKS", side: "C", row: 0, span: true, editable: false, tone: "green" },
+      ...lines.slice(0, 5).map((rl, i) => ({
+        key: `rl${i}`, label: "", value: rl, side: "C", row: i + 1, span: true, editable: false, tone: "green",
       })),
     ];
   })() : [];
@@ -1092,12 +1090,15 @@ export default function CduApp() {
   // Rendered as unrowed centre fields so each line spans the FULL screen
   // width. Putting them in the left column truncated them to a third of the
   // width, which is what was clipping the text.
+  // Full-width rows on the grid rather than the loose block, so the text sits
+  // in the body of the screen at normal size instead of being squeezed tiny
+  // against the header. "SPECIAL" is the row-0 heading, not a stray left label.
   const acarsEfpFields = efpText ? (() => {
-    const lines = wrapText(efpText, 26);
+    const lines = wrapText(efpText, 22);
     return [
-      { key: "efphdr", label: "SPECIAL", value: " ", side: "L", editable: false, tone: "green" },
-      ...lines.slice(0, 8).map((l, i) => ({
-        key: `efp${i}`, label: "", value: l, side: "C", editable: false, tone: "green", small: true, wide: true,
+      { key: "efphdr", label: "", value: "SPECIAL", side: "C", row: 0, span: true, editable: false, tone: "green" },
+      ...lines.slice(0, 5).map((l, i) => ({
+        key: `efp${i}`, label: "", value: l, side: "C", row: i + 1, span: true, editable: false, tone: "green",
       })),
     ];
   })() : [];
@@ -1197,19 +1198,21 @@ export default function CduApp() {
     // rating bare (TO1) where the E-Jets show the FLEX/ECS strip.
     return [
       ...head,
-      { key: "flex",  label: "FLEX",     value: String(rd.flex),      side: "L", editable: false, tone: "green" },
+      // Explicit rows on the L/R fields too — rows 0-1 belong to the
+      // full-width header, so these start at row 2.
+      { key: "flex",  label: "FLEX",     value: String(rd.flex),      side: "L", row: 2, editable: false, tone: "green" },
       { key: "mrtw",  label: "MRTW/LIM", value: String(rd.mrtw),      side: "C", row: 2, editable: false, tone: "green" },
-      { key: "v1",    label: "V1",       value: String(rd.v1),        side: "R", editable: false, tone: "green" },
-      { key: "flap",  label: rd.flap_label || "FLAP", value: String(rd.flaps), side: "L", editable: false, tone: "green" },
+      { key: "v1",    label: "V1",       value: String(rd.v1),        side: "R", row: 2, editable: false, tone: "green" },
+      { key: "flap",  label: rd.flap_label || "FLAP", value: String(rd.flaps), side: "L", row: 3, editable: false, tone: "green" },
       { key: "mtow",  label: "MTOW",     value: String(rd.mtow),      side: "C", row: 3, editable: false, tone: "green" },
-      { key: "vr",    label: "VR",       value: String(rd.vr),        side: "R", editable: false, tone: "green" },
-      { key: "stab",  label: "STAB",     value: String(rd.trim_stab), side: "L", editable: false, tone: "green" },
+      { key: "vr",    label: "VR",       value: String(rd.vr),        side: "R", row: 3, editable: false, tone: "green" },
+      { key: "stab",  label: "STAB",     value: String(rd.trim_stab), side: "L", row: 4, editable: false, tone: "green" },
       { key: "gtow",  label: "GTOW/CG",  value: String(rd.gtow_cg),   side: "C", row: 4, editable: false, tone: "green" },
-      { key: "v2",    label: "V2",       value: String(rd.v2),        side: "R", editable: false, tone: "green" },
-      { key: "accel", label: "ACCEL",    value: String(rd.acc_alt),   side: "L", editable: false, tone: "green" },
-      { key: "vfs",   label: vfsLbl,     value: vfs,                  side: "R", editable: false, tone: "green" },
+      { key: "v2",    label: "V2",       value: String(rd.v2),        side: "R", row: 4, editable: false, tone: "green" },
+      { key: "accel", label: "ACCEL",    value: String(rd.acc_alt),   side: "L", row: 5, editable: false, tone: "green" },
+      { key: "vfs",   label: vfsLbl,     value: vfs,                  side: "R", row: 5, editable: false, tone: "green" },
       ...(kind === "erj" && rd.v215 != null
-        ? [{ key: "v215", label: "V215", value: String(rd.v215), side: "R", editable: false, tone: "green" }]
+        ? [{ key: "v215", label: "V215", value: String(rd.v215), side: "C", row: 5, editable: false, tone: "green" }]
         : []),
     ];
   }
