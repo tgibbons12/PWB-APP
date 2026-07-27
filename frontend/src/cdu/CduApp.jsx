@@ -599,6 +599,16 @@ export default function CduApp() {
       setTpsResult(null);
       setPrintPageIndex(0);
 
+      // The uplink fills in everything the crew DIDN'T have to type: SKED DAY
+      // and FUEL QTY come back from the request. The four fields required to
+      // make the request in the first place (FLT NO, DEP, DEST, CAPT ID) are
+      // left exactly as entered.
+      if (!skedDay.trim()) {
+        const d = data.date_day ?? new Date().getUTCDate();
+        setSkedDay(String(d));
+      }
+      if (!fuelQty.trim() && data.plan_ramp_xml) setFuelQty(fmtWeightK(Number(data.plan_ramp_xml)));
+
       // Stay on INITIALIZE — the crew confirms the fetched data here and
       // navigates on deliberately.
       setIdentStatus("");
@@ -614,7 +624,10 @@ export default function CduApp() {
     } finally {
       setLoadingPlan(false);
     }
-  }, []);
+    // Reads skedDay/fuelQty to avoid overwriting anything already typed, so
+    // they must be dependencies — with an empty array this would close over
+    // their initial (blank) values and clobber crew entries.
+  }, [skedDay, fuelQty]);
 
   // ACARS INITIALIZE — laid out exactly as POH p.9-62:
   //   1L FLT NO       | XPDR FLT ID (centre) |  1R SKED DAY
@@ -763,7 +776,9 @@ export default function CduApp() {
         if (!String(oat).trim()) setOat(xmlData.temp ?? "");
         if (!String(qnh).trim()) setQnh(xmlData.qnh ?? "");
         if (!String(ptow).trim() && xmlData.est_tow_xml) setPtow(fmtWeightK(Number(xmlData.est_tow_xml)));
-        if (!relVersion.trim() && ofpRelease) setRelVersion(String(ofpRelease));
+        // RLS VERSION is deliberately NOT uplinked — the crew reads it off
+        // the paper release. Filling it from the same OFP it's checked
+        // against would make the cross-check meaningless.
         return { error: "REQUEST DATA LOADED" };
       }
       // AeroData won't compute against a stale release — this is the ONLY
@@ -1096,12 +1111,69 @@ export default function CduApp() {
   function buildPerfFields(rd) {
     const vfsLbl = rd.vfs_label || "VFS";
     const vfs = rd.vfs != null ? String(rd.vfs) : "---";
-    const dt = rd.mc != null ? `DT H${String(rd.mc).padStart(3, "0")}` : "";
-    return [
-      // Top section — station/runway/length, and the departure track + OAT
-      // strip the printed report carries above the numbers.
-      { key: "rwy",   label: "RUNWAY / LENGTH", value: `${rd.airport} ${rd.runway}  ${rd.length}FT`,
+    const kind = rd.format_kind || "ejet";
+
+    // Departure-track strip. AERODATA writes "LT/DT Hxxx OAT nn s.ss" — LT
+    // for an upslope runway, DT for down — but replaces the whole line with
+    // "SPECIAL" plus the FRA code when the airport has EFP text. The old
+    // version hardcoded "DT" and never showed SPECIAL at all.
+    const dtLine = rd.efp_text
+      ? `SPECIAL${rd.fra_code ? `   FRA ${rd.fra_code}` : ""}`
+      : `${rd.dt_lt || "DT"} H${String(rd.mc ?? 0).padStart(3, "0")}  OAT ${rd.oat ?? ""}` +
+        (rd.slope != null && rd.slope !== "" ? `  ${Number(rd.slope) >= 0 ? " " : ""}${Number(rd.slope).toFixed(2)}` : "");
+
+    // Thrust/bleed strip — different wording per format, as in the report.
+    const thrStrip =
+      kind === "airbus" ? `${["--", "", "TOGA"].includes(String(rd.flex).trim()) ? "TOGA" : "FLEX"} - BLEEDS ON`
+      : kind === "boeing" ? `${String(rd.thr || "TO").replace("D-TO", "TO").trim() || "TO"} - BLD ON`
+      : kind === "erj" ? String(rd.thr || "TO1")
+      : `FLEX - ${rd.thr || ""} - ${rd.third_col_label || "BLD"} ${rd.bleed || "ON"}`;
+
+    const head = [
+      { key: "rwy", label: "RUNWAY / LENGTH", value: `${rd.airport} ${rd.runway}  ${rd.length}FT`,
         side: "C", row: 0, editable: false, tone: "green" },
+      { key: "dt", label: "", value: dtLine, side: "L", editable: false, tone: "green", small: true },
+      { key: "thr", label: "", value: thrStrip, side: "R", editable: false, tone: "green", small: true },
+    ];
+
+    // AIRBUS — no MRTW/MTOW block at all; speeds carry their own right-hand
+    // annotations and the page ends with the TR/ACC/EO altitudes.
+    if (kind === "airbus") {
+      return [
+        ...head,
+        { key: "v1",   label: "V1",       value: String(rd.v1), side: "L", editable: false, tone: "green" },
+        { key: "vr",   label: "VR",       value: String(rd.vr), side: "L", editable: false, tone: "green" },
+        { key: "v2",   label: "V2",       value: String(rd.v2), side: "L", editable: false, tone: "green" },
+        { key: "flths",label: "FL/THS",   value: `${rd.flaps}/UP${String(rd.trim_stab || "").split(" ").pop() || "0.0"}`,
+          side: "R", editable: false, tone: "green" },
+        { key: "flex", label: "FLEX",     value: String(rd.flex), side: "R", editable: false, tone: "green" },
+        { key: "alts", label: "TR / ACC / EO", value: `${rd.tr_alt} ${rd.acc_alt} ${rd.eo_alt}`,
+          side: "C", row: 4, editable: false, tone: "green", small: true },
+      ];
+    }
+
+    // BOEING — FLAPS not FLEX in the left column, and SEL/OAT + PTOW/CG + N1
+    // instead of the STAB/GTOW/ACCEL row.
+    if (kind === "boeing") {
+      return [
+        ...head,
+        { key: "flaps", label: "FLAPS",    value: String(rd.flaps), side: "L", editable: false, tone: "green" },
+        { key: "mrtw",  label: "MRTW/LIM", value: String(rd.mrtw),  side: "C", row: 1, editable: false, tone: "green" },
+        { key: "v1",    label: "V1",       value: String(rd.v1),    side: "R", editable: false, tone: "green" },
+        { key: "stab",  label: "STAB",     value: String(rd.trim_stab), side: "L", editable: false, tone: "green" },
+        { key: "mtow",  label: "MTOW",     value: String(rd.mtow),  side: "C", row: 2, editable: false, tone: "green" },
+        { key: "vr",    label: "VR",       value: String(rd.vr),    side: "R", editable: false, tone: "green" },
+        { key: "seloat",label: "SEL/OAT",  value: String(rd.sel_oat || ""), side: "L", editable: false, tone: "green" },
+        { key: "ptow",  label: "PTOW/CG",  value: String(rd.gtow_cg), side: "C", row: 3, editable: false, tone: "green" },
+        { key: "v2",    label: "V2",       value: String(rd.v2),    side: "R", editable: false, tone: "green" },
+        ...(rd.n1 ? [{ key: "n1", label: rd.thr_label || "N1", value: String(rd.n1), side: "R", editable: false, tone: "green" }] : []),
+      ];
+    }
+
+    // ERJ / E-JET — same skeleton; the ERJ adds V215 and reads its thrust
+    // rating bare (TO1) where the E-Jets show the FLEX/ECS strip.
+    return [
+      ...head,
       { key: "flex",  label: "FLEX",     value: String(rd.flex),      side: "L", editable: false, tone: "green" },
       { key: "mrtw",  label: "MRTW/LIM", value: String(rd.mrtw),      side: "C", row: 1, editable: false, tone: "green" },
       { key: "v1",    label: "V1",       value: String(rd.v1),        side: "R", editable: false, tone: "green" },
@@ -1112,11 +1184,8 @@ export default function CduApp() {
       { key: "gtow",  label: "GTOW/CG",  value: String(rd.gtow_cg),   side: "C", row: 3, editable: false, tone: "green" },
       { key: "v2",    label: "V2",       value: String(rd.v2),        side: "R", editable: false, tone: "green" },
       { key: "accel", label: "ACCEL",    value: String(rd.acc_alt),   side: "L", editable: false, tone: "green" },
-      { key: "dtoat", label: `${rd.third_col_label || "BLD"} ${rd.bleed || "ON"}`,
-        value: `${dt}  OAT ${rd.oat ?? ""}`.trim(), side: "C", row: 4, editable: false, tone: "green", small: true },
       { key: "vfs",   label: vfsLbl,     value: vfs,                  side: "R", editable: false, tone: "green" },
-      // ERJ family carries an extra V2+15 the other types don't.
-      ...(rd.is_erj && rd.v215 != null
+      ...(kind === "erj" && rd.v215 != null
         ? [{ key: "v215", label: "V215", value: String(rd.v215), side: "R", editable: false, tone: "green" }]
         : []),
     ];

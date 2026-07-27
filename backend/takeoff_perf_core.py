@@ -2333,6 +2333,22 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
                 "oat": temp,
                 "bleed": bleed_str,
                 "efp_text": efp_text,
+                # Which of AERODATA's four runway-block layouts applies. The
+                # printed report picks a different format per type and the CDU
+                # has to follow suit rather than showing one generic layout.
+                "format_kind": (
+                    "airbus" if is_airbus else
+                    "boeing" if is_boeing else
+                    "erj"    if is_erj    else
+                    "ejet"
+                ),
+                # Departure track line: "LT" for an upslope runway, "DT" for
+                # down — replaced entirely by "SPECIAL" + the FRA code when
+                # this airport has engine-failure procedure text.
+                "dt_lt": ("LT" if float(slope or 0) >= 0 else "DT"),
+                "fra_code": (airport_altitudes.get('fra', '') if airport_altitudes else ''),
+                # Boeing-only extras.
+                "sel_oat": f"{flex_str}/{int(float(temp))}" if str(temp).strip() else "",
                 # V215 isn't stored on the runway — the printed report derives
                 # it as V2 + 15 (see the ERJ branch above), so do the same
                 # here. safe_val() returns a STRING ("---" when unusable), so
