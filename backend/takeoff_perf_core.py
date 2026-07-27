@@ -931,8 +931,92 @@ def parse_xml_raw(xml_root, date, aircraft_type):
         'valid_runways': valid_runways,
         'tlr_tables':    tlr_tables,
         'crew_count':    crew_count,
+        # Destination landing data — see LANDING_PERF_DESIGN.md. Purely
+        # additive: nothing in the takeoff path reads this.
+        'landing':       _parse_landing_block(xml_root),
     }
     return xml_data
+
+
+def _parse_landing_block(xml_root):
+    """
+    Extract <tlr><landing> from the SimBrief OFP.
+
+    Gives the destination's runway geometry (LDA, gradient, wind components,
+    max landing weight) plus SimBrief's own planned VREF and dry/wet distances.
+    Those distances are for the ONE weight/condition SimBrief planned — they are
+    a cross-check, not a substitute for a real landing calculation, which is why
+    the CDU computes its own figures and shows these alongside.
+
+    Returns {} when the OFP carries no landing block rather than raising: a
+    missing landing section must never break the takeoff path.
+    """
+    landing = xml_root.find('.//tlr/landing')
+    if landing is None:
+        return {}
+
+    def txt(node, tag, default=''):
+        if node is None:
+            return default
+        el = node.find(tag)
+        return el.text.strip() if el is not None and el.text is not None else default
+
+    def num(node, tag, default=None):
+        raw = txt(node, tag, '')
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
+    def distance_set(tag):
+        d = landing.find(tag)
+        if d is None:
+            return {}
+        return {
+            'weight':           num(d, 'weight'),
+            'flap_setting':     txt(d, 'flap_setting'),
+            'brake_setting':    txt(d, 'brake_setting'),
+            'reverser_credit':  txt(d, 'reverser_credit'),
+            'vref':             num(d, 'speeds_vref'),
+            'actual_distance':  num(d, 'actual_distance'),
+            'factored_distance': num(d, 'factored_distance'),
+        }
+
+    cond = landing.find('conditions')
+    runways = []
+    for r in landing.findall('runway'):
+        rid = txt(r, 'identifier')
+        if not rid:
+            continue
+        runways.append({
+            'id':              rid,
+            'length':          num(r, 'length'),
+            # LDA is the number that matters for landing — NOT tora/toda.
+            'lda':             num(r, 'length_lda'),
+            'elevation':       num(r, 'elevation'),
+            'gradient':        num(r, 'gradient'),
+            'magnetic_course': num(r, 'magnetic_course'),
+            'headwind':        num(r, 'headwind_component'),
+            'crosswind':       num(r, 'crosswind_component'),
+            'ils':             txt(r, 'ils_frequency'),
+            'max_weight_dry':  num(r, 'max_weight_dry'),
+            'max_weight_wet':  num(r, 'max_weight_wet'),
+        })
+
+    return {
+        'airport':           txt(cond, 'airport_icao'),
+        'planned_runway':    txt(cond, 'planned_runway'),
+        'planned_weight':    num(cond, 'planned_weight'),
+        'flap_setting':      txt(cond, 'flap_setting'),
+        'wind_direction':    num(cond, 'wind_direction'),
+        'wind_speed':        num(cond, 'wind_speed'),
+        'temperature':       num(cond, 'temperature'),
+        'altimeter':         txt(cond, 'altimeter'),
+        'surface_condition': txt(cond, 'surface_condition'),
+        'distance_dry':      distance_set('distance_dry'),
+        'distance_wet':      distance_set('distance_wet'),
+        'runways':           runways,
+    }
 
 
 def build_weights(xml_data, pax_count, cargo, plan_ramp, cg_percent, zfw_override=None):
