@@ -106,7 +106,7 @@ function CduLine({ label, value, side, editable, small, error, cyclable, tight, 
   return (
     <div className={`cdu-line cdu-line-${side} ${tight ? "cdu-line-tight" : ""}`}>
       {label && <div className={`cdu-line-label ${dim ? "cdu-dim" : ""}`}>{label}</div>}
-      <div className={`cdu-line-value ${toneClass} ${small ? "cdu-line-small" : ""} ${error ? "cdu-line-error" : ""}`}>
+      <div className={`cdu-line-value ${toneClass} ${small ? "cdu-line-small" : ""} ${error ? "cdu-line-error" : ""} ${editable ? "cdu-line-sel" : ""}`}>
         {displayValue}
       </div>
     </div>
@@ -506,7 +506,19 @@ const CDU_CSS = `
   font-display: swap;
 }
 
-.cdu-body { display: flex; justify-content: center; align-items: center; padding: 12px; background: transparent; }
+/* Lock the page down: a hardware panel shouldn't scroll or bounce. The
+   wrapper alone isn't enough — Safari rubber-bands the document itself, so
+   html/body have to be pinned too. */
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: auto;
+}
+body { margin: 0; }
+
+.cdu-body { display: flex; justify-content: center; align-items: center; padding: 12px; background: transparent;
+  max-width: 100%; max-height: 100%; }
 .cdu-unit {
   position: relative;
   display: inline-block;
@@ -588,6 +600,9 @@ const CDU_CSS = `
 .cdu-line-label { color: #f2f2f2; font-size: 3.0cqw; letter-spacing: 0.16cqw; white-space: nowrap; }
 .cdu-line-value { color: #f2f2f2; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.22cqw; white-space: nowrap; }
 .cdu-line-value.cdu-line-small { font-size: 3.5cqw; font-weight: 400; }
+/* Line-selectable values sit slightly larger than read-only ones, so it's
+   obvious at a glance which lines a LSK press will act on. */
+.cdu-line-value.cdu-line-sel { font-size: 5.1cqw; }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
 .cdu-line-pack { display: flex; flex-direction: row; line-height: 1.05; }
@@ -613,7 +628,7 @@ const CDU_CSS = `
    over the whole box now, so the scratchpad can't rely on flow order. */
 .cdu-scratchpad { position: absolute; left: 4%; right: 4%; bottom: 2%;
   color: #fff; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.22cqw;
-  border-top: 1px solid #333; padding-top: 1%; min-height: 4.9cqw;
+  padding-top: 1%; min-height: 4.9cqw;
   white-space: nowrap; overflow: hidden; }
 /* Scratchpad messages are ALWAYS white — the real unit never shows red here,
    including for rejected entries. Kept as a class so the distinction still

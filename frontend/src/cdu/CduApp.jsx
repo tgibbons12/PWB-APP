@@ -1374,7 +1374,14 @@ export default function CduApp() {
   const effectiveProps = uplinkMsg ? { ...cduProps, message: uplinkMsg } : cduProps;
 
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#1c1c1e" }}>
+    <div style={{
+      height: "100dvh",           // dvh, not vh — accounts for iOS browser chrome
+      overflow: "hidden",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      background: "#1c1c1e",
+      touchAction: "none",        // no pan/pinch gestures on the panel
+      overscrollBehavior: "none", // no rubber-band bounce past the edges
+    }}>
       {/* MENU key always jumps to the top-level MENU page, same on every
           page — set once here rather than repeated in every branch above. */}
       <CduEmulator onMenu={() => setPage("MENU")} {...effectiveProps} />
