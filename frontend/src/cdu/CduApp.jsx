@@ -629,10 +629,13 @@ export default function CduApp() {
     } catch (e) {
       setIdentStatus("");
       setIdentStatusErr(false);
-      return {
-        text: e instanceof ApiError ? e.message.toUpperCase() : "COULD NOT REACH SERVER",
-        error: true,
-      };
+      // Show the backend's `detail` (the actual exception) when there is one —
+      // the bare top-level message alone gives nothing to diagnose from.
+      if (e instanceof ApiError) {
+        console.error("[PWB] flightplan fetch failed:", e.message, e.detail);
+        return { text: String(e.detail || e.message).toUpperCase().slice(0, 40), error: true };
+      }
+      return { text: "COULD NOT REACH SERVER", error: true };
     } finally {
       setLoadingPlan(false);
     }

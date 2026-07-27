@@ -279,6 +279,12 @@ def _parse_and_respond(xml_root, aircraft_type, date):
         # assume certain elements exist; a malformed-but-valid-XML file
         # (e.g. missing <weights>) can still throw here. Surface it plainly
         # rather than a bare 500.
+        #
+        # Log the FULL traceback: this used to be returned only in the JSON
+        # "detail" field, which the client discarded, so a parse failure left
+        # nothing at all in the Railway logs to diagnose from.
+        import traceback
+        print("[ERROR] parse_xml_raw failed:\n" + traceback.format_exc(), flush=True)
         return _error(
             "Failed to extract flight data from XML.",
             status=422,
