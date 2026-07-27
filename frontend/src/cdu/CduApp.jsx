@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import CduEmulator, { DELETE_TOKEN } from "./CduEmulator.jsx";
 import { calculateLanding, toEjetAcType, pressureAltitude, RWYCC_OPTIONS } from "../landing/index.js";
-import { apiFlightplanBySimbrief, apiGenerateTps, apiRunways, forceDownloadTxt, ApiError } from "./api.js";
+import { apiFlightplanBySimbrief, apiGenerateTps, apiRunways, apiAtis, apiPdc, forceDownloadTxt, ApiError } from "./api.js";
 
 // ─── PWB: STANDALONE MCDU EMULATOR ──────────────────────────────────────────
 // Real backend, real data — every value on screen comes from this repo's own
@@ -208,6 +208,14 @@ export default function CduApp() {
   // Populated only when diverting to an airport outside the OFP; null means
   // SimBrief's own landing block is in use.
   const [divRunways, setDivRunways] = useState(null);
+
+  // ── ATS services (ATIS / DCL) ─────────────────────────────────────────────
+  const [atisIcao, setAtisIcao] = useState("");
+  const [atisArr, setAtisArr] = useState(true);
+  const [atisResult, setAtisResult] = useState(null);
+  const [atisPageIndex, setAtisPageIndex] = useState(0);
+  const [dclGate, setDclGate] = useState("");
+  const [pdcResult, setPdcResult] = useState(null);
   const [ldgResults, setLdgResults] = useState(null);
   const [ldgPageIndex, setLdgPageIndex] = useState(0);
 
@@ -287,6 +295,8 @@ export default function CduApp() {
     setLdgFlap("Full"); setLdgRev("Both"); setLdgVappAdd("5");
     setLdgSurface("DRY"); setLdgVis("NORMAL"); setLdgAntiIce("OFF");
     setLdgStallIce("NO"); setLdgAirport(""); setDivRunways(null);
+    setAtisIcao(""); setAtisArr(true); setAtisResult(null); setAtisPageIndex(0);
+    setDclGate(""); setPdcResult(null);
     setLdgResults(null); setLdgPageIndex(0);
     setTpsResult(null); setAcarsPageIndex(0); setPrintPageIndex(0);
     setUplinkMsg(null); setUplinkBusy(false);
@@ -339,6 +349,7 @@ export default function CduApp() {
   function handleAcarsMenuCommit(key) {
     if (key === "preflt") { setPage("PREFLIGHT"); return; }
     if (key === "perf")   { setPage("PERFWB"); return; }
+    if (key === "ats")    { setPage("ATSMENU"); return; }
   }
 
   const acarsMenuFields = [
@@ -346,7 +357,7 @@ export default function CduApp() {
     { key: "enroute", label: "", value: "<ENROUTE",     side: "L", dim: true, dimLabel: "ENROUTE" },
     { key: "postflt", label: "", value: "<POST FLT",    side: "L", dim: true, dimLabel: "POST FLT" },
     { key: "atc",     label: "", value: "<ATC MENU",    side: "L", dim: true, dimLabel: "ATC MENU" },
-    { key: "ats",     label: "", value: "<ATS MENU",    side: "L", dim: true, dimLabel: "ATS MENU" },
+    { key: "ats",     label: "", value: "<ATS MENU",    side: "L", editable: true, selectable: true, tone: "white" },
     { key: "sys",     label: "", value: "<SYS MENU",    side: "L", dim: true, dimLabel: "SYS MENU" },
     { key: "_r1",     label: "", value: "",              side: "R", editable: false },
     { key: "misc2",   label: "", value: "MISC>",         side: "R", dim: true, dimLabel: "MISC" },
@@ -370,6 +381,7 @@ export default function CduApp() {
     if (key === "toconditions") { setPage("COND1"); return; }
     if (key === "perfwb")       { setPage("PERFWB"); return; }
     if (key === "mainmenu")     { setPage("ACARSMENU"); return; }
+    if (key === "atsmenu")      { setPage("ATSMENU"); return; }
   }
 
   const preflightFields = [
@@ -384,8 +396,133 @@ export default function CduApp() {
     { key: "_pf2",         label: "",        value: "",              side: "R", editable: false },
     { key: "_pf3",         label: "",        value: "",              side: "R", editable: false },
     { key: "perfwb",       label: "RWY",     value: "PERF/W&B>",    side: "R", editable: true, selectable: true, tone: "white" },
-    { key: "atsmenu",      label: "",        value: "ATS MENU>",    side: "R", dim: true, dimLabel: "ATS MENU" },
+    { key: "atsmenu",      label: "",        value: "ATS MENU>",    side: "R", editable: true, selectable: true, tone: "white" },
   ];
+
+  // ── ACARS ATS MENU (POH p.9-65) ────────────────────────────────────────────
+  // 2L ATIS REQ and 3L DCL REQ are live; TWIP/PUSHBACK/TAXI are "not active"
+  // on the real aircraft too (p.9-65), so they stay greyed rather than being
+  // invented.
+  function handleAtsMenuCommit(key) {
+    if (key === "atisreq") { setPage("ATISREQ"); return; }
+    if (key === "dclreq")  { setPage("DCLREQ"); return; }
+    if (key === "mainmenu") { setPage("ACARSMENU"); return; }
+  }
+
+  const atsMenuFields = [
+    { key: "twip",     label: "", value: "<TWIP REQ",  side: "L", row: 0, dim: true, dimLabel: "TWIP REQ" },
+    { key: "atisreq",  label: "", value: "<ATIS REQ",  side: "L", row: 1, editable: true, selectable: true, tone: "white" },
+    { key: "dclreq",   label: "", value: "<DCL REQ",   side: "L", row: 2, editable: true, selectable: true, tone: "white" },
+    { key: "pushback", label: "", value: "<PUSHBACK REQ", side: "L", row: 4, dim: true, dimLabel: "PUSHBACK REQ" },
+    { key: "mainmenu", label: "", value: "<MAIN MENU", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
+    { key: "newmsgs",  label: "", value: "NEW MSGS>",  side: "R", row: 0, dim: true, dimLabel: "NEW MSGS" },
+    { key: "atslog",   label: "", value: "ATS LOG>",   side: "R", row: 1, dim: true, dimLabel: "ATS LOG" },
+    { key: "taxireq",  label: "", value: "TAXI REQ>",  side: "R", row: 4, dim: true, dimLabel: "TAXI REQ" },
+    { key: "sysmenu",  label: "", value: "SYS MENU>",  side: "R", row: 5, dim: true, dimLabel: "SYS MENU" },
+  ];
+
+  // ── ACARS ATIS REQUEST (POH p.9-66) ────────────────────────────────────────
+  function handleAtisCommit(key, value) {
+    if (key === "return") { setPage("ATSMENU"); return; }
+    if (key === "airport") {
+      if (value === DELETE_TOKEN) { setAtisIcao(""); return; }
+      const v = String(value).toUpperCase();
+      if (!/^[A-Z]{4}$/.test(v)) return { error: "INVALID ENTRY" };
+      setAtisIcao(v);
+      return;
+    }
+    if (key === "arrdep") { setAtisArr(a => !a); return; }
+    if (key === "request") {
+      const icao = (atisIcao || "").trim();
+      if (!icao) return { error: "ENTER AIRPORT" };
+      if (uplinkBusy) return { error: "REQUEST PENDING" };
+      runDatalink("ATIS REQUEST SENT", async () => {
+        try {
+          const d = await apiAtis(icao, atisArr);
+          setAtisResult(d);
+          setAtisPageIndex(0);
+          setPage("ATISMSG");
+          return { text: `${d.source} ${d.letter || ""}`.trim(), error: false };
+        } catch (e) {
+          return { text: e instanceof ApiError ? e.message.toUpperCase().slice(0, 30) : "ATIS REQ FAILED", error: true };
+        }
+      });
+      return;
+    }
+  }
+
+  const atisFields = [
+    { key: "airport", label: "AIRPORT", value: atisIcao, side: "L", row: 0, editable: true, tone: "amber", boxes: "0000" },
+    { key: "arrdep",  label: "", value: atisArr ? "*ARRIVAL<SEL>" : "*DEPART<SEL>", side: "L", row: 1,
+      editable: true, cyclable: true, tone: "cyan" },
+    { key: "return",  label: "", value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
+    { key: "request", label: "DATALINK", value: "REQUEST*", side: "R", row: 5, editable: true, selectable: true, tone: "white" },
+  ];
+
+  // ATIS text wrapped onto the screen, paged so a long D-ATIS is readable.
+  const ATIS_LINES_PER_PAGE = 5;
+  const atisPages = (() => {
+    if (!atisResult) return [];
+    const lines = wrapText(atisResult.text || "", 22);
+    const out = [];
+    for (let i = 0; i < lines.length; i += ATIS_LINES_PER_PAGE) {
+      out.push(lines.slice(i, i + ATIS_LINES_PER_PAGE));
+    }
+    return out.length ? out : [[" "]];
+  })();
+
+  const atisMsgFields = atisResult ? [
+    { key: "hdr", label: `${atisResult.source}${atisResult.letter ? ` INFO ${atisResult.letter}` : ""}`,
+      value: `${atisResult.airport}  ${atisResult.fetched}`, side: "C", row: 0, span: true, editable: false, tone: "green" },
+    ...(atisPages[atisPageIndex] || []).map((l, i) => ({
+      key: `at${i}`, label: "", value: l, side: "C", row: i + 1, span: true, editable: false, tone: "green",
+    })),
+    { key: "return", label: "", value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
+  ] : [];
+
+  // ── ACARS DCL REQUEST (POH p.9-67) ─────────────────────────────────────────
+  function handleDclCommit(key, value) {
+    if (key === "return") { setPage("ATSMENU"); return; }
+    if (key === "gate") {
+      if (value === DELETE_TOKEN) { setDclGate(""); return; }
+      if (!/^[A-Za-z0-9]{1,5}$/.test(value)) return { error: "INVALID ENTRY" };
+      setDclGate(String(value).toUpperCase());
+      return;
+    }
+    if (key === "request") {
+      const u = simbriefUsername.trim();
+      if (!u) return { error: "NO CAPT ID - SEE INIT" };
+      if (uplinkBusy) return { error: "REQUEST PENDING" };
+      runDatalink("DCL REQUEST SENT", async () => {
+        try {
+          const d = await apiPdc(u, dclGate);
+          setPdcResult(d);
+          setPage("PDCMSG");
+          return { text: "PDC RECEIVED", error: false };
+        } catch (e) {
+          return { text: e instanceof ApiError ? e.message.toUpperCase().slice(0, 30) : "DCL REQ FAILED", error: true };
+        }
+      });
+      return;
+    }
+  }
+
+  const dclFields = [
+    { key: "fltid", label: "FLT ID", value: xmlData?.atc_callsign || fltNoEntry || "", side: "L", row: 0, editable: false, tone: "green" },
+    { key: "atis",  label: "ATIS",   value: atisResult?.letter || "", side: "L", row: 1, editable: false, tone: "green" },
+    { key: "return",label: "",       value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
+    { key: "dep",   label: "DEP",    value: depEntry || xmlData?.origin_icao || "", side: "R", row: 0, editable: false, tone: "green" },
+    { key: "gate",  label: "GATE",   value: dclGate, side: "R", row: 1, editable: true, tone: "cyan", boxes: "00000" },
+    { key: "dest",  label: "DEST",   value: destEntry || xmlData?.dest_icao || "", side: "R", row: 2, editable: false, tone: "green" },
+    { key: "request", label: "DATALINK", value: "REQUEST*", side: "R", row: 5, editable: true, selectable: true, tone: "white" },
+  ];
+
+  const pdcFields = pdcResult ? [
+    ...(pdcResult.lines || []).slice(0, 11).map((l, i) => ({
+      key: `pd${i}`, label: "", value: l || " ", side: "C", editable: false, tone: "green", wide: true,
+    })),
+    { key: "return", label: "", value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
+  ] : [];
 
   // ── ACARS RWY PERF/W&B ─────────────────────────────────────────────────────
   // Exactly the POH's p.9-69 layout: TAKEOFF <CONDITIONS / W&B <LOADSHEET /
@@ -1094,6 +1231,11 @@ export default function CduApp() {
       // and FUEL QTY come back from the request. The four fields required to
       // make the request in the first place (FLT NO, DEP, DEST, CAPT ID) are
       // left exactly as entered.
+      // FLT NO comes back with the uplink like the rest of the flight data —
+      // the crew shouldn't have to retype what the request just returned.
+      if (data.flight_number && data.flight_number !== "UNKNOWN") {
+        setFltNoEntry(String(data.flight_number).toUpperCase());
+      }
       if (!skedDay.trim()) {
         const d = data.date_day ?? new Date().getUTCDate();
         setSkedDay(String(d));
@@ -1212,7 +1354,10 @@ export default function CduApp() {
     { key: "crew4",  label: "CREW-4 ID",value: "", side: "R", dim: true, dimLabel: "CREW-4 ID" },
     // POH p.9-62 LSK 6R — sends the downlink request for the flight data.
     { key: "autoinit", label: "DATALINK", value: "AUTO INIT*", side: "R", editable: true, selectable: true, tone: "white" },
-    { key: "xpdr",   label: "XPDR FLT ID", value: "????????", side: "C", row: 0, editable: false, tone: "green" },
+    // XPDR FLT ID is the filed ATC callsign (RBD4170), not the bare flight
+    // number. Shows ???????? until the uplink supplies it, as on the real page.
+    { key: "xpdr", label: "XPDR FLT ID", value: xmlData?.atc_callsign || "????????",
+      side: "C", row: 0, editable: false, tone: "green" },
   ];
 
   // ── ACARS T/O CONDITION 1/2 (POH p.9-70/71) ────────────────────────────────
@@ -1759,6 +1904,49 @@ export default function CduApp() {
       onFieldCommit: handlePreflightCommit,
       execAvailable: false,
       // Single-page section: PREV/NEXT do nothing. Use the menu lines.
+      onDlk: () => setPage("ACARSMENU"),
+    };
+  } else if (page === "ATSMENU") {
+    cduProps = {
+      title: "ACARS     ATS MENU", pageNum: "",
+      fields: atsMenuFields,
+      onFieldCommit: handleAtsMenuCommit,
+      execAvailable: false,
+      onDlk: () => setPage("ACARSMENU"),
+    };
+  } else if (page === "ATISREQ") {
+    cduProps = {
+      title: "ACARS  ATIS REQUEST", pageNum: "1/1",
+      fields: atisFields,
+      onFieldCommit: handleAtisCommit,
+      execAvailable: false,
+      onDlk: () => setPage("ACARSMENU"),
+    };
+  } else if (page === "ATISMSG") {
+    cduProps = {
+      title: "ACARS        D-ATIS",
+      pageNum: atisPages.length ? `${atisPageIndex + 1}/${atisPages.length}` : "",
+      fields: atisMsgFields,
+      onFieldCommit: (k) => { if (k === "return") setPage("ATISREQ"); },
+      execAvailable: false,
+      onPrev: () => atisPages.length && setAtisPageIndex(i => (i - 1 + atisPages.length) % atisPages.length),
+      onNext: () => atisPages.length && setAtisPageIndex(i => (i + 1) % atisPages.length),
+      onDlk: () => setPage("ACARSMENU"),
+    };
+  } else if (page === "DCLREQ") {
+    cduProps = {
+      title: "ACARS   DCL REQUEST", pageNum: "1/1",
+      fields: dclFields,
+      onFieldCommit: handleDclCommit,
+      execAvailable: false,
+      onDlk: () => setPage("ACARSMENU"),
+    };
+  } else if (page === "PDCMSG") {
+    cduProps = {
+      title: "ACARS           PDC", pageNum: "1/1",
+      fields: pdcFields,
+      onFieldCommit: (k) => { if (k === "return") setPage("DCLREQ"); },
+      execAvailable: false,
       onDlk: () => setPage("ACARSMENU"),
     };
   } else if (page === "PERFWB") {

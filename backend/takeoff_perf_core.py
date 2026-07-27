@@ -879,6 +879,12 @@ def parse_xml_raw(xml_root, date, aircraft_type):
     xml_data = {
         # identity
         'flight_number': get_text(general, 'flight_number', 'UNKNOWN'),
+        # Filed ATC callsign (e.g. "RBD4170") — this is what the XPDR FLT ID
+        # field on the ACARS INITIALIZE page shows, not the bare flight number.
+        'atc_callsign': (
+            (xml_root.findtext('.//atc/callsign') or '').strip().upper()
+            or f"{get_text(general, 'icao_airline', '')}{get_text(general, 'flight_number', '')}".upper()
+        ),
         'icao_airline': get_text(general, 'icao_airline', ''),
         'RLS': get_text(general, 'release', 'UNKNOWN'),
         'date': date,

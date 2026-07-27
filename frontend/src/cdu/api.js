@@ -51,6 +51,27 @@ export async function apiRunways(icao) {
   return data;
 }
 
+// D-ATIS for the ATS MENU's ATIS REQUEST page. `source` says whether it came
+// back as real D-ATIS, VATSIM controller ATIS, or a plain METAR.
+export async function apiAtis(icao, arrival = true) {
+  const res = await fetch(`${API_BASE}/api/atis/${encodeURIComponent(icao)}?type=${arrival ? "arr" : "dep"}`);
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(data.error || "No ATIS available.", data.detail);
+  return data;
+}
+
+// Pre-Departure Clearance for the DCL REQUEST page.
+export async function apiPdc(username, gate = "") {
+  const res = await fetch(`${API_BASE}/api/pdc`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, gate }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(data.error || "Could not build PDC.", data.detail);
+  return data;
+}
+
 export async function apiGenerateTps(payload) {
   const res = await fetch(`${API_BASE}/api/generate`, {
     method: "POST",
