@@ -934,26 +934,37 @@ export default function CduApp() {
     const overWeight = maxWt && weightLb > Number(maxWt);
     // Dispatch check is against the FACTORED distance (121.195).
     const overrun = factored != null && lda > 0 && factored > lda;
+    // The real page (POH p.9-89) is 11 lines of EQUAL-size text, not
+    // label-above-value pairs: V-speeds are inline ("VRF 128") down the right,
+    // and FACTORED/UNFACTORED are label-left value-right on single lines. So
+    // it's rendered as a monospace block rather than on the LSK grid.
+    const L = (s) => String(s ?? "");
+    const pad = (s, n) => L(s).padEnd(n);
+    const rj = (s, n) => L(s).padStart(n);
+    const W = 24; // characters across the real screen
+    const spd = (name, v) => `${pad(name, 4)}${rj(v ?? "---", 3)}`;
+    const ft = (v) => (v != null ? `${v.toLocaleString()}FT` : "----");
+
+    const lines = [
+      `${pad(`${destIcao} ${rwy.id}`, 12)}${rj(Math.round(lda), 12)}`,
+      rj(`${Number(rwy.gradient) >= 0 ? "" : "-"}${Math.abs(Number(rwy.gradient) || 0).toFixed(2)}`, W),
+      ldgAntiIce === "ALL" ? "ECS ON" : "ECS OFF",
+      "- - - - - - - - - - - -",
+      `${pad("FLAP", 6)}${pad("MLDW/LIM", 10)}${spd("VRF", sp.vref)}`,
+      `${pad(ldgFlap === "Full" ? "FULL" : ldgFlap, 6)}${pad(maxWt ? `${fmtWeightK(Number(maxWt))}/S` : "---", 10)}${spd("VAP", sp.vapp)}`,
+      `${pad("", 6)}${pad("ALDW", 10)}${spd("VAC", sp.vac)}`,
+      `${pad("", 6)}${pad(ldwLb != null ? fmtWeightK(ldwLb) : "---", 10)}${spd("VFS", sp.vfs)}`,
+      `${pad("FACTORED DIST", 16)}${rj(ft(factored), 8)}`,
+      `${pad("UNFACTORED DIST", 16)}${rj(ft(unfactored), 8)}`,
+    ];
+
     return [
-      { key: "hdr", label: "", value: `${destIcao} ${rwy.id}${" ".repeat(Math.max(1, 12 - destIcao.length - String(rwy.id).length))}${Math.round(lda)}`,
-        side: "C", row: 0, span: true, editable: false, tone: "green" },
-      { key: "grad", label: "", value: `${Number(rwy.gradient) >= 0 ? "" : "-"}${Math.abs(Number(rwy.gradient) || 0).toFixed(2)}`,
-        side: "R", row: 1, editable: false, tone: "green" },
-      { key: "ecs", label: "", value: ldgAntiIce === "ALL" ? "ECS ON" : "ECS OFF", side: "L", row: 1, editable: false, tone: "green" },
-      { key: "flap", label: "FLAP",     value: String(ldgFlap === "Full" ? "FULL" : ldgFlap), side: "L", row: 2, editable: false, tone: "green" },
-      { key: "mldw", label: "MLDW/LIM", value: maxWt ? `${fmtWeightK(Number(maxWt))}/S` : "---", side: "C", row: 2, editable: false,
-        tone: overWeight ? "amber" : "green", error: overWeight },
-      { key: "vrf",  label: "VRF",      value: sp.vref != null ? String(sp.vref) : "---", side: "R", row: 2, editable: false, tone: "green" },
-      { key: "aldw", label: "ALDW",     value: ldwLb != null ? fmtWeightK(ldwLb) : "---", side: "C", row: 3, editable: false, tone: "green" },
-      { key: "vap",  label: "VAP",      value: sp.vapp != null ? String(sp.vapp) : "---", side: "R", row: 3, editable: false, tone: "green" },
-      { key: "vac",  label: "VAC",      value: sp.vac != null ? String(sp.vac) : "---", side: "R", row: 4, editable: false, tone: "green" },
-      { key: "fact", label: "FACTORED DIST",
-        value: factored != null ? `${factored.toLocaleString()}FT` : "----",
-        side: "C", row: 4, editable: false, tone: overrun ? "amber" : "green", error: overrun },
-      { key: "vfs",  label: "VFS",      value: sp.vfs != null ? String(sp.vfs) : "---", side: "R", row: 5, editable: false, tone: "green" },
-      { key: "unfact", label: "UNFACTORED DIST",
-        value: unfactored != null ? `${unfactored.toLocaleString()}FT` : "----",
-        side: "C", row: 5, editable: false, tone: "green" },
+      ...lines.map((l, i) => ({
+        key: `ld${i}`, label: "", value: l, side: "C", editable: false,
+        // Amber where the value breaches a limit, per the POH colour code.
+        tone: (i === 5 && overWeight) || (i === 8 && overrun) ? "amber" : "green",
+        wide: true,
+      })),
       { key: "ret", label: "", value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
     ];
   }

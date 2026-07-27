@@ -528,12 +528,11 @@ const CDU_CSS = `
    Filename case must match EXACTLY — macOS is case-insensitive but the Linux
    host serving this is not, so "anyocr.ttf" would 404 in production while
    appearing to work locally. */
-/* B612 Mono — commissioned by Airbus and designed specifically for aircraft
-   cockpit displays, so its squared-off wide glyphs match the real Honeywell
-   MCDU face far better than a general-purpose web mono. */
+/* VCR OSD Mono — the blocky dot-matrix face used on the E-Jet CDU. Closer to
+   the real screen than B612 Mono, which is cockpit-designed but too clean. */
 @font-face {
   font-family: "CduScreen";
-  src: url("/B612Mono-Regular.ttf") format("truetype");
+  src: url("/VCROSDMono-xcrafts.ae7bac6d.ttf") format("truetype");
   font-display: swap;
 }
 
@@ -608,10 +607,14 @@ body { margin: 0; }
 .cdu-cell { min-width: 0; overflow: hidden; }
 /* Full-width row — one value across all three columns. */
 .cdu-row-span { display: block; }
-/* Free-text pages (REMARKS, SPECIAL/EFP) flow from just under the header
-   rather than being pinned to LSKs — they have no LSK bindings. */
-.cdu-loose { position: absolute; left: 0; right: 0; top: 14%;
+/* Monospace report pages (LAND RWY DATA, REMARKS, SPECIAL/EFP) flow from just
+   under the header rather than being pinned to LSKs. Line height is tightened
+   so a full 11-line report block fits at NORMAL text size — shrinking the
+   text to fit instead is what made these unreadable. */
+.cdu-loose { position: absolute; left: 0; right: 0; top: 13%;
   display: flex; flex-direction: column; align-items: stretch; }
+.cdu-loose .cdu-line { line-height: 1.0; }
+.cdu-loose .cdu-line-value { font-size: calc(var(--u) * 0.040); }
 /* Monospace text blocks (the runway data block, REMARKS, SPECIAL) rely on
    column alignment, so spaces must be preserved verbatim. */
 .cdu-wide .cdu-line-value { font-variant-numeric: tabular-nums; }
