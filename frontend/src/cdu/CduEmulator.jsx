@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import ejetChassis from "./ejet.453de855.png";
 
 // ─── CDU EMULATOR ───────────────────────────────────────────────────────────
@@ -191,6 +191,28 @@ export default function CduEmulator({
   // the hidden spot on the bottom-left corner screw — invisible in normal use.
   const [showHotspots, setShowHotspots] = useState(false);
 
+  // Screen text used to be sized in `cqw` (container query units), but those
+  // need Safari 16+. An iPad Air 2 tops out at iPadOS 15, so every font-size
+  // was simply dropped there and the text fell back to the browser default —
+  // hence wildly different sizes between an Air 2 and a Pro. Measuring the
+  // screen width here and exposing it as a plain px custom property gives the
+  // same proportional scaling on anything with ResizeObserver (iOS 13.4+).
+  const screenRef = useRef(null);
+  const [screenW, setScreenW] = useState(0);
+  useEffect(() => {
+    const el = screenRef.current;
+    if (!el) return;
+    const measure = () => setScreenW(el.getBoundingClientRect().width);
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // System messages land in the scratchpad exactly like the real unit. They
   // clear on a SINGLE CLR or DEL press (they aren't typed text, so
   // backspacing through them character by character would be wrong).
@@ -349,7 +371,7 @@ export default function CduEmulator({
             letterboxed if that guess were wrong. */}
         <img className="cdu-unit-img" src={ejetChassis} alt="" />
         {/* ── Screen (positioned over the image's black screen rect) ── */}
-        <div className="cdu-screen">
+        <div className="cdu-screen" ref={screenRef} style={{ "--u": `${screenW}px` }}>
           <div className="cdu-screen-header">
             <span>{title}</span>
             <span className="cdu-page-num">{pageNum}</span>
@@ -546,11 +568,10 @@ body { margin: 0; }
 }
 
 /* Screen — positioned over the image's black rect. */
-/* container-type here (not on .cdu-unit) — this box's size comes from the
-   percentages below, not its contents, so containment is safe. All screen
-   type is sized in cqw = percent of THIS box's width, so it scales with the
-   chassis instead of staying a fixed px size next to huge LSKs on an iPad. */
-.cdu-screen { container-type: inline-size;
+/* All screen type is sized from --u (this box's width in px, measured in JS)
+   rather than container-query units, which need Safari 16+ and silently
+   dropped every font-size on older iPads. */
+.cdu-screen {
   position: absolute; left: 15.0%; top: 6.1%; width: 69.4%; height: 41.1%;
   background: #050505; border-radius: 3px; padding: 4% 4%; box-sizing: border-box;
   display: flex; flex-direction: column;
@@ -562,8 +583,8 @@ body { margin: 0; }
 /* Title line is the SAME size as the body text on the real unit — having it
    smaller was part of what made the rows look mis-spaced against the LSKs. */
 .cdu-screen-header { display: flex; align-items: center; justify-content: space-between; color: #f2f2f2;
-  font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.22cqw; padding-bottom: 1%;
-  border-bottom: 1px solid #333; flex-shrink: 0; }
+  font-size: calc(var(--u) * 0.045); font-weight: 400; letter-spacing: calc(var(--u) * 0.0022);
+  padding-bottom: 1%; border-bottom: 1px solid #333; flex-shrink: 0; }
 .cdu-page-num { color: #f2f2f2; font-weight: 400; }
 /* Spans the whole screen box so row positions can be expressed directly in
    screen-box percentages (see ROW_Y_IN_SCREEN). */
@@ -591,21 +612,21 @@ body { margin: 0; }
 
 .cdu-line { display: flex; flex-direction: column; justify-content: center; line-height: 1.05; }
 .cdu-line-tight { line-height: 1; }
-.cdu-line-tight .cdu-line-label { font-size: 2.8cqw; }
-.cdu-line-tight .cdu-line-value { font-size: 3.6cqw; }
+.cdu-line-tight .cdu-line-label { font-size: calc(var(--u) * 0.028); }
+.cdu-line-tight .cdu-line-value { font-size: calc(var(--u) * 0.036); }
 /* Labels are WHITE on the real screen, same as the title — not cyan. */
 /* The real Honeywell face sets characters noticeably wider apart than any
    web mono — see the cockpit photos, where "ACARS T/O CONDITION" spans most
    of the screen. Extra tracking gets much closer with the fonts available. */
-.cdu-line-label { color: #f2f2f2; font-size: 3.0cqw; letter-spacing: 0.16cqw; white-space: nowrap; }
+.cdu-line-label { color: #f2f2f2; font-size: calc(var(--u) * 0.030); letter-spacing: calc(var(--u) * 0.0016); white-space: nowrap; }
 /* Read-only values sit a step DOWN from line-selectable ones. Done this way
-   round deliberately: 4.5cqw is the widest that fits a third-width column, so
+   round deliberately: 0.045u is the widest that fits a third-width column, so
    enlarging the selectable lines instead pushed values like "LOADSHEET>" past
    the cell edge and clipped them. */
-.cdu-line-value { color: #f2f2f2; font-size: 4.0cqw; font-weight: 400; letter-spacing: 0.22cqw; white-space: nowrap; }
-.cdu-line-value.cdu-line-small { font-size: 3.5cqw; font-weight: 400; }
+.cdu-line-value { color: #f2f2f2; font-size: calc(var(--u) * 0.040); font-weight: 400; letter-spacing: calc(var(--u) * 0.0022); white-space: nowrap; }
+.cdu-line-value.cdu-line-small { font-size: calc(var(--u) * 0.035); font-weight: 400; }
 /* Line-selectable values — the reference size, which fits the column. */
-.cdu-line-value.cdu-line-sel { font-size: 4.5cqw; }
+.cdu-line-value.cdu-line-sel { font-size: calc(var(--u) * 0.045); }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
 .cdu-line-pack { display: flex; flex-direction: row; line-height: 1.05; }
@@ -630,8 +651,8 @@ body { margin: 0; }
 /* Pinned to the bottom of the screen box — the body is absolutely positioned
    over the whole box now, so the scratchpad can't rely on flow order. */
 .cdu-scratchpad { position: absolute; left: 4%; right: 4%; bottom: 2%;
-  color: #fff; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.22cqw;
-  padding-top: 1%; min-height: 4.9cqw;
+  color: #fff; font-size: calc(var(--u) * 0.045); font-weight: 400; letter-spacing: calc(var(--u) * 0.0022);
+  padding-top: 1%; min-height: calc(var(--u) * 0.049);
   white-space: nowrap; overflow: hidden; }
 /* Scratchpad messages are ALWAYS white — the real unit never shows red here,
    including for rejected entries. Kept as a class so the distinction still
