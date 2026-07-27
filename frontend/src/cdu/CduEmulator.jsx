@@ -547,7 +547,7 @@ const CDU_CSS = `
 /* Title line is the SAME size as the body text on the real unit — having it
    smaller was part of what made the rows look mis-spaced against the LSKs. */
 .cdu-screen-header { display: flex; align-items: center; justify-content: space-between; color: #f2f2f2;
-  font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw; padding-bottom: 1%;
+  font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.42cqw; padding-bottom: 1%;
   border-bottom: 1px solid #333; flex-shrink: 0; }
 .cdu-page-num { color: #f2f2f2; font-weight: 400; }
 /* Spans the whole screen box so row positions can be expressed directly in
@@ -579,8 +579,11 @@ const CDU_CSS = `
 .cdu-line-tight .cdu-line-label { font-size: 2.8cqw; }
 .cdu-line-tight .cdu-line-value { font-size: 3.6cqw; }
 /* Labels are WHITE on the real screen, same as the title — not cyan. */
-.cdu-line-label { color: #f2f2f2; font-size: 3.0cqw; letter-spacing: 0.12cqw; white-space: nowrap; }
-.cdu-line-value { color: #f2f2f2; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw; white-space: nowrap; }
+/* The real Honeywell face sets characters noticeably wider apart than any
+   web mono — see the cockpit photos, where "ACARS T/O CONDITION" spans most
+   of the screen. Extra tracking gets much closer with the fonts available. */
+.cdu-line-label { color: #f2f2f2; font-size: 3.0cqw; letter-spacing: 0.32cqw; white-space: nowrap; }
+.cdu-line-value { color: #f2f2f2; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.42cqw; white-space: nowrap; }
 .cdu-line-value.cdu-line-small { font-size: 3.5cqw; font-weight: 400; }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
@@ -606,7 +609,7 @@ const CDU_CSS = `
 /* Pinned to the bottom of the screen box — the body is absolutely positioned
    over the whole box now, so the scratchpad can't rely on flow order. */
 .cdu-scratchpad { position: absolute; left: 4%; right: 4%; bottom: 2%;
-  color: #fff; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw;
+  color: #fff; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.42cqw;
   border-top: 1px solid #333; padding-top: 1%; min-height: 4.9cqw;
   white-space: nowrap; overflow: hidden; }
 /* Scratchpad messages are ALWAYS white — the real unit never shows red here,
