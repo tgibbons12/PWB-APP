@@ -447,12 +447,14 @@ export default function CduEmulator({
 }
 
 const CDU_CSS = `
-/* Screen face. Served from frontend/public/ (NOT imported) so a missing file
-   simply 404s and falls back to the stack below, instead of breaking the
-   build. Drop anyocr.ttf into frontend/public/ to enable it. */
+/* Screen face, served from frontend/public/ (NOT imported) so a missing file
+   just 404s and falls back to the stack below rather than breaking the build.
+   Filename case must match EXACTLY — macOS is case-insensitive but the Linux
+   host serving this is not, so "anyocr.ttf" would 404 in production while
+   appearing to work locally. */
 @font-face {
   font-family: "AnyOCR";
-  src: url("/anyocr.ttf") format("truetype");
+  src: url("/AnyOCR.ttf") format("truetype");
   font-display: swap;
 }
 
