@@ -289,30 +289,14 @@ export default function CduApp() {
       return;
     }
     if (key === "acarsmenu") { setPage("ACARSMENU"); return; }
+    // DATA REQ* here is scoped to ROUTE data only — the flight's identity and
+    // planned weight. Conditions and loadsheet each have their own request on
+    // their own page, so one button no longer overwrites everything at once.
     if (key === "datareq") {
       if (!xmlData) return { error: "NO FLIGHT PLAN" };
-      // Loads the OFP's planned figures into every blank entry field across
-      // the conditions and loadsheet pages, as an editable starting point.
-      // Section split mirrors the backend's own (25% fwd / 75% aft); cargo is
-      // split 50/50 because the OFP carries only a single total.
-      setOat(xmlData.temp ?? "");
-      setQnh(xmlData.qnh ?? "");
-      setWind(xmlData.wind ?? "");
       setPtow(xmlData.est_tow_xml ? fmtWeightK(Number(xmlData.est_tow_xml)) : "");
       if (!runway1 && xmlData.plan_rwy && runwayIds.includes(xmlData.plan_rwy)) setRunway1(xmlData.plan_rwy);
-
-      const paxTotal = Number(xmlData.pax_count_xml) || 0;
-      const cargoTotal = Number(xmlData.cargo_xml) || 0;
-      const fwdPax = Math.round(paxTotal * 0.25);
-      setAdChA(`${fwdPax}/0`);
-      setAdChB(`${paxTotal - fwdPax}/0`);
-      setAdChC("0/0");
-      setBagFwd(`0/${Math.round(cargoTotal / 2)}`);
-      setBagAft(`0/${cargoTotal - Math.round(cargoTotal / 2)}`);
-      setFaAcm("0/1/1");
-      setCloset("65");
-      setToFuel(String(xmlData.plan_ramp_xml ?? ""));
-      return { error: "OFP DATA LOADED" };
+      return { error: "ROUTE DATA LOADED" };
     }
   }
 
@@ -387,6 +371,24 @@ export default function CduApp() {
 
   function handleLoadsheetCommit(key, value) {
     if (key === "perfwb") { setPage("PERFWB"); return; }
+    // W/B REQ* — loads only this page's weight & balance figures from the OFP.
+    // Section split mirrors the backend's own (25% fwd / 75% aft); cargo is
+    // split 50/50 because the OFP carries a single total.
+    if (key === "wbreq") {
+      if (!xmlData) return { error: "NO FLIGHT PLAN" };
+      const paxTotal = Number(xmlData.pax_count_xml) || 0;
+      const cargoTotal = Number(xmlData.cargo_xml) || 0;
+      const fwdPax = Math.round(paxTotal * 0.25);
+      setAdChA(`${fwdPax}/0`);
+      setAdChB(`${paxTotal - fwdPax}/0`);
+      setAdChC("0/0");
+      setBagFwd(`0/${Math.round(cargoTotal / 2)}`);
+      setBagAft(`0/${cargoTotal - Math.round(cargoTotal / 2)}`);
+      setFaAcm("0/1/1");
+      setCloset("65");
+      setToFuel(String(xmlData.plan_ramp_xml ?? ""));
+      return { error: "W/B DATA LOADED" };
+    }
     if (key === "send") {
       if (![runway1, runway2, runway3].some(r => r.trim())) return { error: "ENTER RUNWAY 1" };
       if (!relVersion) return { error: "ENTER REL VERSION" };
@@ -453,7 +455,8 @@ export default function CduApp() {
     { key: "closet",  label: "CLOSET",       value: closet,  side: "R", editable: true, tone: "cyan" },
     { key: "tofuel",  label: "T/O FUEL",     value: toFuel ? fmtWeightK(Number(toFuel)) : "", side: "R", editable: true, tone: "amber", boxes: "00.0" },
     { key: "blstfuel",label: "BLST FUEL",    value: blstFuel ? fmtWeightK(Number(blstFuel)) : "", side: "R", editable: true, tone: "cyan" },
-    { key: "torwydata", label: "T/O",        value: "DATA>", side: "R", editable: true, selectable: true, tone: "white" },
+    // W/B REQ* pulls the OFP's weight & balance figures into this page only.
+    { key: "wbreq",     label: "W/B",        value: "REQ*",  side: "R", editable: true, selectable: true, tone: "white" },
     { key: "send",      label: "",           value: "SEND",  side: "R", editable: true, selectable: true, tone: "white" },
     { key: "ttlpax",  label: "TTL PAX",
       value: String(sumPair(adChA) + sumPair(adChB) + sumPair(adChC)),

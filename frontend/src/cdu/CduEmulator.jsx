@@ -447,6 +447,15 @@ export default function CduEmulator({
 }
 
 const CDU_CSS = `
+/* Screen face. Served from frontend/public/ (NOT imported) so a missing file
+   simply 404s and falls back to the stack below, instead of breaking the
+   build. Drop anyocr.ttf into frontend/public/ to enable it. */
+@font-face {
+  font-family: "AnyOCR";
+  src: url("/anyocr.ttf") format("truetype");
+  font-display: swap;
+}
+
 .cdu-body { display: flex; justify-content: center; align-items: center; padding: 12px; background: transparent; }
 .cdu-unit {
   position: relative;
@@ -483,12 +492,10 @@ const CDU_CSS = `
   position: absolute; left: 15.0%; top: 6.1%; width: 69.4%; height: 41.1%;
   background: #050505; border-radius: 3px; padding: 4% 4%; box-sizing: border-box;
   display: flex; flex-direction: column;
-  /* The real screen is a wide, squarish dot-matrix face. Nothing bundled with
-     a browser matches it exactly (a proper match needs a webfont file), but
-     these are the widest, squarest monospaces commonly available — much
-     closer than Consolas/Menlo, which are narrow and rounded. */
-  font-family: "Andale Mono","Lucida Console","DejaVu Sans Mono","Liberation Mono",
-               "Courier New",monospace;
+  /* AnyOCR first (the real squarish dot-matrix look); the rest are the
+     widest, squarest monospaces commonly installed, used if it's absent. */
+  font-family: "AnyOCR","Andale Mono","Lucida Console","DejaVu Sans Mono",
+               "Liberation Mono","Courier New",monospace;
   overflow: hidden; }
 /* Title line is the SAME size as the body text on the real unit — having it
    smaller was part of what made the rows look mis-spaced against the LSKs. */

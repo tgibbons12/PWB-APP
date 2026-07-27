@@ -401,6 +401,20 @@ def get_speed_other(icao_code, weight=None, speed_type=None, oat=None, altitude=
         'B38M': BOEING_737_N1_DATA
     }
 
+    # Normalise type-code variants onto the keys this table actually uses.
+    # SimBrief reports the E175 as "E175" (and sometimes E75S/E75L/E17X), but
+    # the table below is keyed "E75L" — so the straight lookup missed and VFS
+    # came back empty for every E175 flight. Same story for the other E-Jets.
+    _ALIASES = {
+        'E175': 'E75L', 'E75S': 'E75L', 'E17X': 'E75L', 'E75L': 'E75L',
+        'E170': 'E170',
+        'E190': 'E190', 'E290': 'E190', 'E19X': 'E190', 'E90L': 'E190',
+        'E195': 'E195', 'E295': 'E195', 'E95L': 'E195',
+    }
+    if icao_code:
+        _key = str(icao_code).upper().replace('-', '').replace(' ', '')
+        icao_code = _ALIASES.get(_key, _key)
+
     if icao_code not in SPEED_OTHER_DATA:
         return None
 
