@@ -39,6 +39,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 import takeoff_perf_core as core
+import runway_index
+import acars_services
 
 app = Flask(__name__)
 CORS(app)  # dev-friendly default; tighten origins before shipping publicly
@@ -262,6 +264,74 @@ def parse_oooi():
 @app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.route("/api/atis/<icao>", methods=["GET"])
+def atis(icao):
+    """
+    D-ATIS for the ATS MENU's ATIS REQUEST page (POH p.9-66).
+
+    Tries real-world D-ATIS, then VATSIM controller ATIS, then a raw METAR.
+    The `source` field says which one came back — a METAR is not an ATIS and
+    the page shows it as METAR so it isn't mistaken for one.
+    """
+    arrival = request.args.get("type", "arr").lower() != "dep"
+    result = acars_services.fetch_atis(icao, arrival=arrival)
+    if result.get("error"):
+        return _error(result["error"], status=404)
+    return jsonify(result)
+
+
+@app.route("/api/pdc", methods=["POST"])
+def pdc():
+    """
+    Pre-Departure Clearance for the DCL REQUEST page (POH p.9-67).
+
+    Body: { "username": "<simbrief user>", "gate": "<optional gate>" }
+
+    Re-fetches the OFP rather than taking xml_data from the client, because
+    the PDC needs raw XML fields (route string, squawk, scheduled times) that
+    parse_xml_raw doesn't carry into xml_data.
+    """
+    body = request.get_json(silent=True) or {}
+    username = (body.get("username") or "").strip()
+    if not username:
+        return _error("Missing 'username'.")
+
+    xml_tree = core.fetch_xml_from_api(username)
+    if xml_tree is None:
+        return _error("Could not fetch a flight plan from SimBrief.", status=422)
+
+    result = acars_services.build_pdc(xml_tree.getroot(), gate=(body.get("gate") or "").strip())
+    if result.get("error"):
+        return _error(result["error"], status=422)
+    return jsonify(result)
+
+
+@app.route("/api/runways/<icao>", methods=["GET"])
+def runways_for_airport(icao):
+    """
+    Fallback runway data for a DIVERSION airport (POH p.9-83 allows a new
+    airport to be entered on the landing conditions page).
+
+    Deliberately limited — see runway_index.py for the full reasoning:
+      * `length_ft` is runway LENGTH, not LDA. The source has no displaced
+        thresholds, so its figure can overstate landing distance available
+        (KSDF 17L: 8,589 ft here vs a true LDA of 7,800 ft).
+      * No slope is returned; the source's values don't agree with the TLR
+        and the convention is unverified.
+    The response is marked `source: "INDEX"` so the client can show that these
+    numbers are less authoritative than the OFP's own landing block.
+    """
+    rwys = runway_index.lookup(icao)
+    if not rwys:
+        return _error(f"No runway data for '{str(icao).upper()}'.", status=404)
+    return jsonify({
+        "airport": str(icao).upper(),
+        "source": "INDEX",
+        "lda_is_length": True,   # caller must not treat length_ft as LDA
+        "runways": rwys,
+    })
 
 
 def _parse_and_respond(xml_root, aircraft_type, date):

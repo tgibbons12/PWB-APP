@@ -40,6 +40,17 @@ export async function apiFlightplanBySimbrief(username) {
   return data;
 }
 
+// Fallback runway data for a DIVERSION airport — see backend/runway_index.py.
+// The figures are less authoritative than the OFP's own landing block:
+// `length_ft` is runway LENGTH (no displaced thresholds in the source, so it
+// can overstate LDA) and no slope is provided. Flagged `source: "INDEX"`.
+export async function apiRunways(icao) {
+  const res = await fetch(`${API_BASE}/api/runways/${encodeURIComponent(icao)}`);
+  const data = await res.json();
+  if (!res.ok) throw new ApiError(data.error || "No runway data for that airport.", data.detail);
+  return data;
+}
+
 export async function apiGenerateTps(payload) {
   const res = await fetch(`${API_BASE}/api/generate`, {
     method: "POST",

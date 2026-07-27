@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import CduEmulator, { DELETE_TOKEN } from "./CduEmulator.jsx";
 import { calculateLanding, toEjetAcType, pressureAltitude, RWYCC_OPTIONS } from "../landing/index.js";
-import { apiFlightplanBySimbrief, apiGenerateTps, forceDownloadTxt, ApiError } from "./api.js";
+import { apiFlightplanBySimbrief, apiGenerateTps, apiRunways, forceDownloadTxt, ApiError } from "./api.js";
 
 // ─── PWB: STANDALONE MCDU EMULATOR ──────────────────────────────────────────
 // Real backend, real data — every value on screen comes from this repo's own
@@ -205,6 +205,9 @@ export default function CduApp() {
   const [ldgAntiIce, setLdgAntiIce] = useState("OFF");
   const [ldgStallIce, setLdgStallIce] = useState("NO");
   const [ldgAirport, setLdgAirport] = useState("");
+  // Populated only when diverting to an airport outside the OFP; null means
+  // SimBrief's own landing block is in use.
+  const [divRunways, setDivRunways] = useState(null);
   const [ldgResults, setLdgResults] = useState(null);
   const [ldgPageIndex, setLdgPageIndex] = useState(0);
 
@@ -283,7 +286,7 @@ export default function CduApp() {
     setLdgZfw(""); setArrFuel("");
     setLdgFlap("Full"); setLdgRev("Both"); setLdgVappAdd("5");
     setLdgSurface("DRY"); setLdgVis("NORMAL"); setLdgAntiIce("OFF");
-    setLdgStallIce("NO"); setLdgAirport("");
+    setLdgStallIce("NO"); setLdgAirport(""); setDivRunways(null);
     setLdgResults(null); setLdgPageIndex(0);
     setTpsResult(null); setAcarsPageIndex(0); setPrintPageIndex(0);
     setUplinkMsg(null); setUplinkBusy(false);
@@ -601,8 +604,24 @@ export default function CduApp() {
   ];
 
   // ── ACARS LANDING CONDITIONS ──────────────────────────────────────────────
-  const ldgRunwayIds = (ldgData?.runways ?? []).map(r => r.id);
   const destIcao = ldgData?.airport || xmlData?.dest_icao || "----";
+  // When diverting, runway data comes from the global index instead of the
+  // OFP. Normalised to the same shape so the calculation doesn't care which
+  // source it got, but `fromIndex` marks the weaker data on the result page.
+  const ldgRwySet = divRunways
+    ? divRunways.runways.map(r => ({
+        id: r.id,
+        lda: r.length_ft,        // LENGTH, not a true LDA — see below
+        elevation: r.elevation,
+        gradient: 0,             // index slope is unverified; assume level
+        headwind: null,          // no magnetic course; derived from WIND entry
+        heading_deg: r.heading_deg,
+        max_weight_dry: null,
+        max_weight_wet: null,
+        fromIndex: true,
+      }))
+    : (ldgData?.runways ?? []);
+  const ldgRunwayIds = ldgRwySet.map(r => r.id);
   // LDW = ZFW + arrival fuel, in pounds. Derived, never entered.
   const ldwLb = (() => {
     const z = parseFloat(ldgZfw), f = parseFloat(arrFuel);
@@ -632,8 +651,21 @@ export default function CduApp() {
     const ids = [ldgRwy1, ldgRwy2, ldgRwy3].map(r => r.trim().toUpperCase()).filter(Boolean);
     const out = [];
     for (const id of ids) {
-      const rwy = (ldgData.runways ?? []).find(r => r.id === id);
+      const rwy = ldgRwySet.find(r => r.id === id);
       if (!rwy) continue;
+      // SimBrief resolves the headwind component against the runway's
+      // magnetic course. The index has no course, so for a diversion it's
+      // derived from the WIND entry and the runway number instead.
+      let hw = Number(rwy.headwind);
+      if (!Number.isFinite(hw)) {
+        const m = String(ldgWind).match(/^(\d{1,3})\s*\/\s*(\d{1,3})$/);
+        if (m && rwy.heading_deg != null) {
+          const delta = ((Number(m[1]) - rwy.heading_deg + 540) % 360) - 180;
+          hw = Math.round(Number(m[2]) * Math.cos((delta * Math.PI) / 180));
+        } else {
+          hw = 0;
+        }
+      }
       const res = calculateLanding({
         acType,
         landingWeight: wtLb,
@@ -642,9 +674,7 @@ export default function CduApp() {
         vappAdd: parseFloat(ldgVappAdd) || 0,
         pressureAlt: pressureAltitude(rwy.elevation, ldgQnh),
         oatC: parseFloat(ldgOat) || 0,
-        // SimBrief gives the headwind component per runway directly, which is
-        // more accurate than re-deriving it from the wind entry.
-        headwind: Number(rwy.headwind) || 0,
+        headwind: hw,
         brakingAction: parseInt(rwycc, 10) || 6,
         slopePct: Number(rwy.gradient) || 0,
       });
@@ -660,14 +690,27 @@ export default function CduApp() {
   function handleLdgCondCommit(key, value) {
     if (key === "perfwb" || key === "ldgreturn") { setPage("PERFWB"); return; }
     if (key === "ldgairport") {
-      if (value === DELETE_TOKEN) { setLdgAirport(""); return; }
+      if (value === DELETE_TOKEN) { setLdgAirport(""); setDivRunways(null); return; }
       const v = String(value).toUpperCase();
       if (!/^[A-Z]{4}$/.test(v)) return { error: "INVALID ENTRY" };
       // POH p.9-83 LSK 1R: "A new airport may be entered in case of a
-      // diversion." We have no runway data for an airport outside the OFP, so
-      // say so rather than silently computing against the wrong runways.
-      if (v !== destIcao) return { error: "NO RWY DATA FOR ARPT" };
-      setLdgAirport(v);
+      // diversion." Back to the OFP destination = use its landing block.
+      if (v === destIcao) { setLdgAirport(v); setDivRunways(null); return; }
+      // Otherwise fall back to the global runway index. Its data is weaker
+      // (runway LENGTH not LDA, no slope) so the result pages mark it.
+      if (uplinkBusy) return { error: "REQUEST PENDING" };
+      runDatalink("ARPT REQUEST SENT", async () => {
+        try {
+          const d = await apiRunways(v);
+          setDivRunways(d);
+          setLdgAirport(v);
+          setLdgRwy1(""); setLdgRwy2(""); setLdgRwy3("");
+          setLdgResults(null);
+          return { text: `${v} ${d.runways.length} RWY - LENGTH ONLY`, error: false };
+        } catch (e) {
+          return { text: e instanceof ApiError ? e.message.toUpperCase().slice(0, 30) : "ARPT LOOKUP FAILED", error: true };
+        }
+      });
       return;
     }
     if (key === "ldgsurface") {
@@ -907,6 +950,12 @@ export default function CduApp() {
     if (ldgAntiIce === "ALL") notes.push("ANTI-ICE ALL");
     if (ldgStallIce === "YES") notes.push("STALL PROT ICE SPEED");
     if ((parseInt(rwycc, 10) || 6) < 6) notes.push("ADVISORY ONLY - NOT CERTIFIED");
+    // A diversion uses the global index: runway LENGTH rather than a true LDA
+    // (no displaced thresholds) and no slope. The crew must be told.
+    if (divRunways) {
+      notes.push("DIVERSION - RWY LENGTH NOT LDA");
+      notes.push("VERIFY LDA AND SLOPE");
+    }
     return [
       { key: "hdr", label: "REMARKS", value: notes[0] || "NONE", side: "C", row: 0, span: true, editable: false, tone: "green" },
       ...notes.slice(1, 5).map((n, i) => ({
@@ -944,7 +993,11 @@ export default function CduApp() {
     // thousands separator: the real screen shows "4361FT".
     const ft = (v) => (v != null ? `${Math.round(v)}FT` : "----");
     return [
-      { key: "hdr", label: "RUNWAY / LDA", value: `${destIcao} ${rwy.id}   ${Math.round(lda)}FT`,
+      // Header says LDA for OFP data but LENGTH for index data, because the
+      // index has no displaced thresholds — calling it LDA there would
+      // overstate the distance available (KSDF 17L: 8589 vs a true 7800).
+      { key: "hdr", label: rwy.fromIndex ? "RUNWAY / LENGTH" : "RUNWAY / LDA",
+        value: `${ldgAirport || destIcao} ${rwy.id}   ${Math.round(lda)}FT`,
         side: "C", row: 0, span: true, editable: false, tone: "green" },
       { key: "cond", label: `${ldgAntiIce === "ALL" ? "ECS ON" : "ECS OFF"}   GRAD`,
         value: `${Number(rwy.gradient) >= 0 ? "" : "-"}${Math.abs(Number(rwy.gradient) || 0).toFixed(2)}`,
@@ -1696,7 +1749,7 @@ export default function CduApp() {
       fields: acarsMenuFields,
       onFieldCommit: handleAcarsMenuCommit,
       execAvailable: false,
-      onPrev: () => setPage("MENU"),
+      // Single-page section: PREV/NEXT do nothing. Use the menu lines.
       onDlk: () => setPage("ACARSMENU"),
     };
   } else if (page === "PREFLIGHT") {
@@ -1705,7 +1758,7 @@ export default function CduApp() {
       fields: preflightFields,
       onFieldCommit: handlePreflightCommit,
       execAvailable: false,
-      onPrev: () => setPage("ACARSMENU"),
+      // Single-page section: PREV/NEXT do nothing. Use the menu lines.
       onDlk: () => setPage("ACARSMENU"),
     };
   } else if (page === "PERFWB") {
@@ -1714,8 +1767,8 @@ export default function CduApp() {
       fields: perfWbFields,
       onFieldCommit: handlePerfWbCommit,
       execAvailable: false,
-      onPrev: () => setPage("PREFLIGHT"),
-      onNext: () => setPage("COND1"),
+      // Single-page section: PREV/NEXT do nothing. Use the menu lines.
+
       onDlk: () => setPage("ACARSMENU"),
     };
   } else if (page === "LOADSHEET") {
@@ -1724,8 +1777,9 @@ export default function CduApp() {
       fields: loadsheetFields,
       onFieldCommit: handleLoadsheetCommit,
       execAvailable: false, // no EXEC key on this unit — send is LSK 6R SEND*
-      onPrev: () => setPage("PERFWB"),
-      onNext: () => setPage("PAXDETAIL"), // 1/2 -> 2/2
+      // Cycles within the LOADSHEET section (1/2 <-> 2/2) only.
+      onPrev: () => setPage("PAXDETAIL"),
+      onNext: () => setPage("PAXDETAIL"),
       onDlk: () => setPage("ACARSMENU"),
     };
   } else if (page === "LANDCOND") {
@@ -1734,7 +1788,9 @@ export default function CduApp() {
       fields: ldgCondFields,
       onFieldCommit: handleLdgCondCommit,
       execAvailable: false,
-      onPrev: () => setPage("PERFWB"),
+      // PREV/NEXT cycle within the LAND COND section only — they never leave
+      // it. Use the named menu lines (<RETURN, <PERF/W&B) to change section.
+      onPrev: () => setPage("LANDCOND2"),
       onNext: () => setPage("LANDCOND2"),
       onDlk: () => setPage("ACARSMENU"),
     };
@@ -1759,10 +1815,9 @@ export default function CduApp() {
       onFieldCommit: (k) => { if (k === "ret" || k === "ldgreturn") setPage("LANDCOND"); },
       execAvailable: false,
       message: ldgMessage,
-      onPrev: () => {
-        if (ldgPageIndex > 0) setLdgPageIndex(i => i - 1);
-        else setPage("LANDCOND");
-      },
+      // Wraps within the landing report pages; PREV from 1/n goes to the last
+      // page rather than out of the section. <RETURN leaves.
+      onPrev: () => ldgPages.length && setLdgPageIndex(i => (i - 1 + ldgPages.length) % ldgPages.length),
       onNext: () => ldgPages.length && setLdgPageIndex(i => (i + 1) % ldgPages.length),
       onDlk: () => setPage("ACARSMENU"),
     };
@@ -1783,8 +1838,8 @@ export default function CduApp() {
       onFieldCommit: handleIdentCommit,
       execAvailable: false, // no EXEC key — fetch is LSK 6R AUTO INIT*
       message: identStatus ? { text: identStatus, error: identStatusErr } : undefined,
-      onPrev: () => setPage("ACARSMENU"),
-      onNext: xmlData ? () => setPage("PERFWB") : undefined,
+      // Single-page section: PREV/NEXT do nothing. Use the menu lines.
+
       onDlk: () => setPage("ACARSMENU"),
     };
   } else if (page === "COND1") {
@@ -1794,7 +1849,8 @@ export default function CduApp() {
       onFieldCommit: handleCond1Commit,
       execAvailable: false,
       message: perfStatus ? { text: perfStatus, error: perfStatusErr } : undefined,
-      onPrev: () => setPage("PERFWB"),
+      // Cycles within the T/O CONDITION section (1/2 <-> 2/2) only.
+      onPrev: () => setPage("COND2"),
       onNext: () => setPage("COND2"),
       onDlk: () => setPage("ACARSMENU"),
       onFpl: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
@@ -1809,7 +1865,7 @@ export default function CduApp() {
       execAvailable: false,
       message: perfStatus ? { text: perfStatus, error: perfStatusErr } : undefined,
       onPrev: () => setPage("COND1"),
-      onNext: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
+      onNext: () => setPage("COND1"),
       onDlk: () => setPage("ACARSMENU"),
       onFpl: tpsResult ? () => { setAcarsPageIndex(0); setPage("ACARS"); } : undefined,
     };
@@ -1821,10 +1877,9 @@ export default function CduApp() {
       onFieldCommit: handleAcarsCommit,
       execAvailable: false,
       message: acarsMessage,
-      onPrev: () => {
-        if (acarsPageIndex > 0) setAcarsPageIndex(i => i - 1);
-        else setPage("COND2");
-      },
+      // Wraps within the report pages; PREV from 1/n goes to the last page
+      // rather than out of the section.
+      onPrev: () => setAcarsPageIndex(i => (i - 1 + ACARS_PAGES.length) % ACARS_PAGES.length),
       // Wraps within the report pages. There is no raw-text page in the
       // cycle any more: paging used to fall through into a "TPS PRINT" dump
       // of the generated .txt, so NEXT alternated between the real formatted
