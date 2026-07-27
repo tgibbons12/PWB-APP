@@ -146,6 +146,29 @@ export default function CduApp() {
   const [printPageIndex, setPrintPageIndex] = useState(0);
   const [resetArmed, setResetArmed] = useState(false); // ACARS RESET confirm latch
 
+  // ── Datalink round-trip simulation ────────────────────────────────────────
+  // A real ACARS request goes out over VDR and comes back from the ground
+  // station seconds later — it is never instant. Every uplink/downlink here
+  // (AUTO INIT, DATA REQ, W/B REQ, SEND) posts a "sent" message, waits a
+  // random interval in this range, then delivers its result.
+  const DATALINK_MIN_MS = 3000;
+  const DATALINK_MAX_MS = 9000;
+  const [uplinkBusy, setUplinkBusy] = useState(false);
+  const [uplinkMsg, setUplinkMsg] = useState(null); // { text, error }
+
+  const runDatalink = useCallback(async (sentText, work) => {
+    setUplinkBusy(true);
+    setUplinkMsg({ text: sentText, error: false });
+    const wait = DATALINK_MIN_MS + Math.random() * (DATALINK_MAX_MS - DATALINK_MIN_MS);
+    await new Promise(res => setTimeout(res, wait));
+    try {
+      const done = await work();
+      if (done) setUplinkMsg({ text: done.text, error: !!done.error });
+    } finally {
+      setUplinkBusy(false);
+    }
+  }, []);
+
   // ACARS INITIALIZE entries (POH p.9-62). All crew-typed; AUTO INIT fills
   // none of them. DEP/DEST are required before AUTO INIT will fire.
   const [fltNoEntry, setFltNoEntry] = useState("");
@@ -220,6 +243,7 @@ export default function CduApp() {
     setFaAcm("2/0"); setCloset("65"); setToFuel(""); setBlstFuel("");
     setPaxWtA(""); setPaxWtB(""); setPaxWtC(""); setCgPercent("25.0");
     setTpsResult(null); setAcarsPageIndex(0); setPrintPageIndex(0);
+    setUplinkMsg(null); setUplinkBusy(false);
     setPerfStatus(""); setPerfStatusErr(false);
     setIdentStatus("ENTER SIMBRIEF ID"); setIdentStatusErr(false);
     setResetArmed(false);
@@ -335,9 +359,13 @@ export default function CduApp() {
     // their own page, so one button no longer overwrites everything at once.
     if (key === "datareq") {
       if (!xmlData) return { error: "NO FLIGHT PLAN" };
-      setPtow(xmlData.est_tow_xml ? fmtWeightK(Number(xmlData.est_tow_xml)) : "");
-      if (!runway1 && xmlData.plan_rwy && runwayIds.includes(xmlData.plan_rwy)) setRunway1(xmlData.plan_rwy);
-      return { error: "ROUTE DATA LOADED" };
+      if (uplinkBusy) return { error: "REQUEST PENDING" };
+      runDatalink("ROUTE REQUEST SENT", () => {
+        setPtow(xmlData.est_tow_xml ? fmtWeightK(Number(xmlData.est_tow_xml)) : "");
+        if (!runway1 && xmlData.plan_rwy && runwayIds.includes(xmlData.plan_rwy)) setRunway1(xmlData.plan_rwy);
+        return { text: "ROUTE DATA RECEIVED", error: false };
+      });
+      return;
     }
   }
 
@@ -417,24 +445,29 @@ export default function CduApp() {
     // split 50/50 because the OFP carries a single total.
     if (key === "wbreq") {
       if (!xmlData) return { error: "NO FLIGHT PLAN" };
-      const paxTotal = Number(xmlData.pax_count_xml) || 0;
-      const cargoTotal = Number(xmlData.cargo_xml) || 0;
-      const fwdPax = Math.round(paxTotal * 0.25);
-      setAdChA(`${fwdPax}/0`);
-      setAdChB(`${paxTotal - fwdPax}/0`);
-      setAdChC("0/0");
-      setBagFwd(`0/${Math.round(cargoTotal / 2)}`);
-      setBagAft(`0/${cargoTotal - Math.round(cargoTotal / 2)}`);
-      setFaAcm("0/1/1");
-      setCloset("65");
-      setToFuel(String(xmlData.plan_ramp_xml ?? ""));
-      return { error: "W/B DATA LOADED" };
+      if (uplinkBusy) return { error: "REQUEST PENDING" };
+      runDatalink("W/B REQUEST SENT", () => {
+        const paxTotal = Number(xmlData.pax_count_xml) || 0;
+        const cargoTotal = Number(xmlData.cargo_xml) || 0;
+        const fwdPax = Math.round(paxTotal * 0.25);
+        setAdChA(`${fwdPax}/0`);
+        setAdChB(`${paxTotal - fwdPax}/0`);
+        setAdChC("0/0");
+        setBagFwd(`0/${Math.round(cargoTotal / 2)}`);
+        setBagAft(`0/${cargoTotal - Math.round(cargoTotal / 2)}`);
+        setFaAcm("0/1/1");
+        setCloset("65");
+        setToFuel(String(xmlData.plan_ramp_xml ?? ""));
+        return { text: "W/B DATA RECEIVED", error: false };
+      });
+      return;
     }
     if (key === "send") {
-      if (![runway1, runway2, runway3].some(r => r.trim())) return { error: "ENTER RUNWAY 1" };
-      if (!relVersion) return { error: "ENTER REL VERSION" };
-      if (!relOk) return { error: `REL MISMATCH - OFP ${ofpRelease}` };
-      handleExec();
+      if (!loadsheetReady) return { error: "COMPLETE LOADSHEET FIRST" };
+      if (!cond1Ready) return { error: "COMPLETE T/O COND FIRST" };
+      if (!relOk) return { error: `RLS MISMATCH - OFP ${ofpRelease}` };
+      if (uplinkBusy) return { error: "REQUEST PENDING" };
+      runDatalink("T/O REQUEST SENT", handleExec);
       return;
     }
     if (key === "torwydata") {
@@ -566,14 +599,18 @@ export default function CduApp() {
       setTpsResult(null);
       setPrintPageIndex(0);
 
-      setIdentStatus("INIT COMPLETE");
-      setIdentStatusErr(false);
       // Stay on INITIALIZE — the crew confirms the fetched data here and
-      // navigates on deliberately. Jumping straight to PERF/W&B skipped past
-      // the page they were working on.
+      // navigates on deliberately.
+      setIdentStatus("");
+      setIdentStatusErr(false);
+      return { text: "INIT COMPLETE", error: false };
     } catch (e) {
-      setIdentStatus(e instanceof ApiError ? e.message.toUpperCase() : "COULD NOT REACH SERVER");
-      setIdentStatusErr(true);
+      setIdentStatus("");
+      setIdentStatusErr(false);
+      return {
+        text: e instanceof ApiError ? e.message.toUpperCase() : "COULD NOT REACH SERVER",
+        error: true,
+      };
     } finally {
       setLoadingPlan(false);
     }
@@ -636,7 +673,8 @@ export default function CduApp() {
       if (!u) return { error: "ENTER CAPT ID" };
       if (!depEntry.trim()) return { error: "ENTER DEP" };
       if (!destEntry.trim()) return { error: "ENTER DEST" };
-      doFetch(u);
+      if (uplinkBusy) return { error: "REQUEST PENDING" };
+      runDatalink("INIT REQUEST SENT", () => doFetch(u));
       return;
     }
   }
@@ -714,16 +752,26 @@ export default function CduApp() {
       setAcarsPageIndex(0); setPage("ACARS");
       return;
     }
+    // One key, two jobs, matching its own label: while anything mandatory is
+    // still blank it reads REQUEST* and pulls the OFP's planned values in;
+    // once everything is filled it reads SEND> and transmits.
     if (key === "send") {
-      if (![runway1, runway2, runway3].some(r => r.trim())) return { error: "ENTER RUNWAY 1" };
-      if (!String(wind).trim()) return { error: "ENTER WIND" };
-      if (!String(oat).trim() || !String(qnh).trim()) return { error: "ENTER OAT/QNH" };
-      if (!String(ptow).trim()) return { error: "ENTER PTOW" };
+      if (!cond1Ready) {
+        if (!xmlData) return { error: "NO FLIGHT PLAN" };
+        if (!runway1 && xmlData.plan_rwy && runwayIds.includes(xmlData.plan_rwy)) setRunway1(xmlData.plan_rwy);
+        if (!String(wind).trim()) setWind(xmlData.wind ?? "");
+        if (!String(oat).trim()) setOat(xmlData.temp ?? "");
+        if (!String(qnh).trim()) setQnh(xmlData.qnh ?? "");
+        if (!String(ptow).trim() && xmlData.est_tow_xml) setPtow(fmtWeightK(Number(xmlData.est_tow_xml)));
+        if (!relVersion.trim() && ofpRelease) setRelVersion(String(ofpRelease));
+        return { error: "REQUEST DATA LOADED" };
+      }
       // AeroData won't compute against a stale release — this is the ONLY
       // point the release version is checked; entry itself never rejects.
-      if (!relVersion) return { error: "ENTER RLS VERSION 2/2" };
       if (!relOk) return { error: `RLS MISMATCH - OFP ${ofpRelease}` };
-      handleExec();
+      if (!loadsheetReady) return { error: "COMPLETE LOADSHEET FIRST" };
+      if (uplinkBusy) return { error: "REQUEST PENDING" };
+      runDatalink("T/O REQUEST SENT", handleExec);
       return;
     }
     if (key === "wind")  { setWind(value === DELETE_TOKEN ? "" : value); return; }
@@ -737,10 +785,20 @@ export default function CduApp() {
       return;
     }
     if (key === "oatqnh") {
-      if (value === DELETE_TOKEN) return { error: "NOT ALLOWED" }; // required field
-      const [o, q] = value.split("/");
+      if (value === DELETE_TOKEN) { setOat(""); setQnh(""); return; }
+      const [o, q] = String(value).split("/");
       if (o === undefined || q === undefined) return { error: "INVALID ENTRY" };
-      setOat(o); setQnh(q);
+      if (!/^-?\d{1,3}$/.test(o.trim())) return { error: "INVALID ENTRY" };
+      // QNH takes "29.92" or "2992" (inHg), or a 3-4 digit hPa value such as
+      // "1013" — anything without a decimal and 4 digits starting 2 or 3 is
+      // read as inHg, otherwise it's left as typed.
+      const qt = q.trim();
+      let qOut;
+      if (/^\d{2}\.\d{1,2}$/.test(qt)) qOut = qt;
+      else if (/^\d{4}$/.test(qt) && /^[23]/.test(qt)) qOut = `${qt.slice(0, 2)}.${qt.slice(2)}`;
+      else if (/^\d{3,4}$/.test(qt)) qOut = qt; // hPa
+      else return { error: "INVALID ENTRY" };
+      setOat(o.trim()); setQnh(qOut);
       return;
     }
   }
@@ -755,6 +813,13 @@ export default function CduApp() {
     [runway1, runway2, runway3].some(r => r.trim()) &&
     String(wind).trim() && String(oat).trim() && String(qnh).trim() &&
     String(ptow).trim() && relVersion.trim()
+  );
+  // POH p.9-71 LSK 3R: PTOW is only for planning "prior to receiving the
+  // loadsheet" — the real system uses loadsheet data on any subsequent
+  // request. So takeoff data can't be requested until the loadsheet's
+  // mandatory entries (AD/CH A-C and T/O FUEL) are in.
+  const loadsheetReady = !!(
+    adChA.trim() && adChB.trim() && adChC.trim() && String(toFuel).trim()
   );
   // Exact POH p.9-70/71 layout. Note there is NO separate GUST field and no
   // REL VERSION field on the real page — per p.9-71 LSK 1R, gust is folded
@@ -869,7 +934,7 @@ export default function CduApp() {
     const runways = [runway1, runway2, runway3].map(r => r.trim().toUpperCase()).filter(Boolean);
     if (!xmlData || runways.length === 0) return;
     setGenerating(true);
-    setPerfStatus("GENERATING...");
+    setPerfStatus("");
     setPerfStatusErr(false);
     try {
       // WIND is a single entry on the real page — the pilot types the gust
@@ -903,9 +968,14 @@ export default function CduApp() {
       setPerfStatus("");
       setPerfStatusErr(false);
       setPage("ACARS");
+      return { text: "TAKEOFF DATA AVAIL", error: false };
     } catch (e) {
-      setPerfStatus(e instanceof ApiError ? e.message.toUpperCase() : "GENERATION FAILED");
-      setPerfStatusErr(true);
+      setPerfStatus("");
+      setPerfStatusErr(false);
+      return {
+        text: e instanceof ApiError ? e.message.toUpperCase() : "NO TAKEOFF DATA AVAIL",
+        error: true,
+      };
     } finally {
       setGenerating(false);
     }
@@ -1018,34 +1088,38 @@ export default function CduApp() {
   // slope, and the FLEX/thrust-rating/bleed strip) were missing entirely.
   // Rendered as full-width monospace text rather than on the LSK grid — this
   // page is read-only, so column alignment matters more than LSK alignment.
+  // Field set per POH p.9-78: a top section identifying the runway request,
+  // then FLEX, MRTW/LIM, FLAP, MTOW, STAB, GTOW/CG, V1/VR/V2/VFS and ACCEL.
+  // Rendered as proper labelled fields on the 3-column grid rather than as a
+  // monospace dump — the raw-text version had the right columns but was far
+  // too small to read on the screen.
   function buildPerfFields(rd) {
-    const pad = (s, n) => String(s ?? "").padEnd(n);
-    const lpad = (s, n) => String(s ?? "").padStart(n);
-    const flapLbl = rd.flap_label || "FLAP";
     const vfsLbl = rd.vfs_label || "VFS";
     const vfs = rd.vfs != null ? String(rd.vfs) : "---";
-    const slope = rd.slope != null && rd.slope !== "" ? Number(rd.slope).toFixed(2) : "----";
-    const thrRating = rd.thr || "TO1";
-    const bleedStrip = ` FLEX - ${pad(thrRating, 5)} - ${rd.third_col_label || "BLD"} ${rd.bleed || "ON"}`;
-
-    const lines = [
-      `${pad(`${rd.airport} ${rd.runway}`, 16)}${lpad(rd.length, 8)}`,
-      `DT H${lpad(String(rd.mc ?? "").padStart(3, "0"), 3)}  OAT ${lpad(rd.oat, 3)}   ${lpad(slope, 5)}`,
-      bleedStrip,
-      `FLEX    ${pad("MRTW/LIM", 10)}V1 ${lpad(rd.v1, 3)}`,
-      `${pad(rd.flex, 8)}${pad(rd.mrtw, 10)}VR ${lpad(rd.vr, 3)}`,
-      `${pad(flapLbl, 10)}${pad("MTOW", 8)}V2 ${lpad(rd.v2, 3)}`,
-      `${pad(rd.flaps, 10)}${pad(rd.mtow, 7)}${lpad(vfsLbl, 4)} ${lpad(vfs, 3)}`,
-      `STAB    ${pad("GTOW/CG", 11)}ACCEL`,
-      `${pad(rd.trim_stab, 8)}${pad(rd.gtow_cg, 11)}${lpad(rd.acc_alt, 5)}`,
-      // ERJ family carries an extra V2+15 column the other types don't.
-      ...(rd.is_erj && rd.v215 != null ? [`V215 ${rd.v215}`] : []),
+    const dt = rd.mc != null ? `DT H${String(rd.mc).padStart(3, "0")}` : "";
+    return [
+      // Top section — station/runway/length, and the departure track + OAT
+      // strip the printed report carries above the numbers.
+      { key: "rwy",   label: "RUNWAY / LENGTH", value: `${rd.airport} ${rd.runway}  ${rd.length}FT`,
+        side: "C", row: 0, editable: false, tone: "green" },
+      { key: "flex",  label: "FLEX",     value: String(rd.flex),      side: "L", editable: false, tone: "green" },
+      { key: "mrtw",  label: "MRTW/LIM", value: String(rd.mrtw),      side: "C", row: 1, editable: false, tone: "green" },
+      { key: "v1",    label: "V1",       value: String(rd.v1),        side: "R", editable: false, tone: "green" },
+      { key: "flap",  label: rd.flap_label || "FLAP", value: String(rd.flaps), side: "L", editable: false, tone: "green" },
+      { key: "mtow",  label: "MTOW",     value: String(rd.mtow),      side: "C", row: 2, editable: false, tone: "green" },
+      { key: "vr",    label: "VR",       value: String(rd.vr),        side: "R", editable: false, tone: "green" },
+      { key: "stab",  label: "STAB",     value: String(rd.trim_stab), side: "L", editable: false, tone: "green" },
+      { key: "gtow",  label: "GTOW/CG",  value: String(rd.gtow_cg),   side: "C", row: 3, editable: false, tone: "green" },
+      { key: "v2",    label: "V2",       value: String(rd.v2),        side: "R", editable: false, tone: "green" },
+      { key: "accel", label: "ACCEL",    value: String(rd.acc_alt),   side: "L", editable: false, tone: "green" },
+      { key: "dtoat", label: `${rd.third_col_label || "BLD"} ${rd.bleed || "ON"}`,
+        value: `${dt}  OAT ${rd.oat ?? ""}`.trim(), side: "C", row: 4, editable: false, tone: "green", small: true },
+      { key: "vfs",   label: vfsLbl,     value: vfs,                  side: "R", editable: false, tone: "green" },
+      // ERJ family carries an extra V2+15 the other types don't.
+      ...(rd.is_erj && rd.v215 != null
+        ? [{ key: "v215", label: "V215", value: String(rd.v215), side: "R", editable: false, tone: "green" }]
+        : []),
     ];
-
-    return lines.map((l, i) => ({
-      key: `pl${i}`, label: "", value: l || " ",
-      side: "C", editable: false, tone: "green", small: true, wide: true,
-    }));
   }
 
   const perfPages = runwayResults.length
@@ -1200,11 +1274,15 @@ export default function CduApp() {
       onDlk: () => setPage("ACARSMENU") };
   }
 
+  // A live datalink message outranks whatever the page would otherwise show —
+  // it's the most recent thing that happened and the crew is waiting on it.
+  const effectiveProps = uplinkMsg ? { ...cduProps, message: uplinkMsg } : cduProps;
+
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#1c1c1e" }}>
       {/* MENU key always jumps to the top-level MENU page, same on every
           page — set once here rather than repeated in every branch above. */}
-      <CduEmulator onMenu={() => setPage("MENU")} {...cduProps} />
+      <CduEmulator onMenu={() => setPage("MENU")} {...effectiveProps} />
     </div>
   );
 }
