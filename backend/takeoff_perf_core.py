@@ -772,8 +772,19 @@ def parse_xml_raw(xml_root, date, aircraft_type):
 
     # Engine
     acdata_parsed = xml_root.find('.//api_params/acdata_parsed')
-    acdata = json.loads(acdata_parsed.text.strip()) if acdata_parsed is not None else {}
-    engine_type = acdata.get('comments', 'UNKNOWN')
+    # The element can EXIST but be empty (<acdata_parsed/>), in which case
+    # .text is None — the old `is not None` check only guarded against the
+    # element being absent, so an empty one crashed on .strip(). It can also
+    # contain something that isn't valid JSON. Neither is fatal: engine_type
+    # falls back to UNKNOWN, so degrade rather than failing the whole parse.
+    acdata = {}
+    if acdata_parsed is not None and acdata_parsed.text and acdata_parsed.text.strip():
+        try:
+            acdata = json.loads(acdata_parsed.text.strip())
+        except (ValueError, TypeError) as _e:
+            print(f"[WARN] acdata_parsed is not valid JSON, ignoring: {_e}", flush=True)
+            acdata = {}
+    engine_type = acdata.get('comments', 'UNKNOWN') if isinstance(acdata, dict) else 'UNKNOWN'
 
     # Runways
     icaocode_early = get_text(aircraft, 'icaocode', aircraft_type)
@@ -1122,7 +1133,17 @@ def generate_tps(loadsheet_data, uplink_data, valid_runways, anti_ice_on, output
     # Otherwise TO1 is kept.
     EJET_ICAOS = {'E170', 'E175', 'E190', 'E195', 'E290', 'E295', 'E17X', 'E19X'}
     _ejet_icao = uplink_data.get('icaocode', '').upper()
-    is_ejet = _ejet_icao in EJET_ICAOS or _ejet_icao.startswith('E1') or _ejet_icao.startswith('E2')
+    # SimBrief reports this airframe's ICAO code as E75L/E75S/E75W (and
+    # E70x/E90x/E95x for the others) — none of which start "E1"/"E2", so the
+    # old check made is_ejet FALSE for every real E175 flight and skipped the
+    # TO1/TO2 thrust logic entirely. base_type carries the clean family code
+    # ("E175"), so test that too rather than trying to enumerate every variant.
+    _ejet_base = str(uplink_data.get('base_type', '') or '').upper()
+    is_ejet = (
+        _ejet_icao in EJET_ICAOS
+        or _ejet_base in EJET_ICAOS
+        or bool(re.match(r'^E(7[05][A-Z]|9[05][A-Z]|1[79]\d|2[9]\d)$', _ejet_icao))
+    )
 
     if is_ejet:
         import re as _re_ejet

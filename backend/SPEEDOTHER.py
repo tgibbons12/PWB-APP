@@ -402,18 +402,33 @@ def get_speed_other(icao_code, weight=None, speed_type=None, oat=None, altitude=
     }
 
     # Normalise type-code variants onto the keys this table actually uses.
-    # SimBrief reports the E175 as "E175" (and sometimes E75S/E75L/E17X), but
-    # the table below is keyed "E75L" — so the straight lookup missed and VFS
-    # came back empty for every E175 flight. Same story for the other E-Jets.
+    # One airframe has several codes: the E175 appears as E175 (base_type),
+    # E75L / E75S / E75W (short/long/winglet ICAO variants) and E17X. The
+    # table is keyed E75L, so a straight lookup missed and VFS came back
+    # empty. Same story across the E-Jet family.
     _ALIASES = {
-        'E175': 'E75L', 'E75S': 'E75L', 'E17X': 'E75L', 'E75L': 'E75L',
-        'E170': 'E170',
-        'E190': 'E190', 'E290': 'E190', 'E19X': 'E190', 'E90L': 'E190',
-        'E195': 'E195', 'E295': 'E195', 'E95L': 'E195',
+        # E175 family — long, short and winglet variants are one aircraft.
+        'E175': 'E75L', 'E75L': 'E75L', 'E75S': 'E75L', 'E75W': 'E75L', 'E17X': 'E75L',
+        # E170 family.
+        'E170': 'E170', 'E70L': 'E170', 'E70S': 'E170', 'E70W': 'E170',
+        # E190 family (incl. E2).
+        'E190': 'E190', 'E90L': 'E190', 'E90S': 'E190', 'E290': 'E190', 'E19X': 'E190',
+        # E195 family (incl. E2).
+        'E195': 'E195', 'E95L': 'E195', 'E95S': 'E195', 'E295': 'E195',
     }
     if icao_code:
         _key = str(icao_code).upper().replace('-', '').replace(' ', '')
-        icao_code = _ALIASES.get(_key, _key)
+        if _key in _ALIASES:
+            icao_code = _ALIASES[_key]
+        elif _key not in SPEED_OTHER_DATA:
+            # Pattern fallback so a variant nobody has enumerated yet still
+            # resolves instead of silently returning None. Order matters:
+            # 175 must be tested before the looser 17x rule.
+            import re as _re
+            if _re.match(r'^E(175|75[A-Z]|17[A-Z])$', _key):   icao_code = 'E75L'
+            elif _re.match(r'^E(170|70[A-Z])$', _key):          icao_code = 'E170'
+            elif _re.match(r'^E(190|90[A-Z]|290|29[A-Z])$', _key): icao_code = 'E190'
+            elif _re.match(r'^E(195|95[A-Z]|295)$', _key):      icao_code = 'E195'
 
     if icao_code not in SPEED_OTHER_DATA:
         return None
