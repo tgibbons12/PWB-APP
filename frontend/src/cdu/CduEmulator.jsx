@@ -453,8 +453,8 @@ const CDU_CSS = `
    host serving this is not, so "anyocr.ttf" would 404 in production while
    appearing to work locally. */
 @font-face {
-  font-family: "AnyOCR";
-  src: url("/AnyOCR.ttf") format("truetype");
+  font-family: "CduScreen";
+  src: url("/ShareTechMono-Regular.218f763c.ttf") format("truetype");
   font-display: swap;
 }
 
@@ -494,9 +494,9 @@ const CDU_CSS = `
   position: absolute; left: 15.0%; top: 6.1%; width: 69.4%; height: 41.1%;
   background: #050505; border-radius: 3px; padding: 4% 4%; box-sizing: border-box;
   display: flex; flex-direction: column;
-  /* AnyOCR first (the real squarish dot-matrix look); the rest are the
-     widest, squarest monospaces commonly installed, used if it's absent. */
-  font-family: "AnyOCR","Andale Mono","Lucida Console","DejaVu Sans Mono",
+  /* Share Tech Mono — the closest match to the real screen face. The rest are
+     the widest, squarest monospaces commonly installed, used if it's absent. */
+  font-family: "CduScreen","Andale Mono","Lucida Console","DejaVu Sans Mono",
                "Liberation Mono","Courier New",monospace;
   overflow: hidden; }
 /* Title line is the SAME size as the body text on the real unit — having it
