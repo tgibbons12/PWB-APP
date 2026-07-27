@@ -197,6 +197,14 @@ export default function CduApp() {
   const [ldgRev, setLdgRev] = useState("Both");
   const [rwycc, setRwycc] = useState("");       // TALPA RCAM code — never inferred
   const [ldgVappAdd, setLdgVappAdd] = useState("5");
+  // POH p.9-80/9-85. SURFACE and BRK ACTION RPT are SEPARATE selections and
+  // AeroData takes the more conservative of the two (p.9-81) — the crew is
+  // told to set the braking action report first and leave surface alone.
+  const [ldgSurface, setLdgSurface] = useState("DRY");
+  const [ldgVis, setLdgVis] = useState("NORMAL");
+  const [ldgAntiIce, setLdgAntiIce] = useState("OFF");
+  const [ldgStallIce, setLdgStallIce] = useState("NO");
+  const [ldgAirport, setLdgAirport] = useState("");
   const [ldgResults, setLdgResults] = useState(null);
   const [ldgPageIndex, setLdgPageIndex] = useState(0);
 
@@ -274,6 +282,8 @@ export default function CduApp() {
     setLdgOat(""); setLdgQnh(""); setLdgWind(""); setRwycc("");
     setLdgZfw(""); setArrFuel("");
     setLdgFlap("Full"); setLdgRev("Both"); setLdgVappAdd("5");
+    setLdgSurface("DRY"); setLdgVis("NORMAL"); setLdgAntiIce("OFF");
+    setLdgStallIce("NO"); setLdgAirport("");
     setLdgResults(null); setLdgPageIndex(0);
     setTpsResult(null); setAcarsPageIndex(0); setPrintPageIndex(0);
     setUplinkMsg(null); setUplinkBusy(false);
@@ -645,7 +655,30 @@ export default function CduApp() {
   }
 
   function handleLdgCondCommit(key, value) {
-    if (key === "perfwb") { setPage("PERFWB"); return; }
+    if (key === "perfwb" || key === "ldgreturn") { setPage("PERFWB"); return; }
+    if (key === "ldgairport") {
+      if (value === DELETE_TOKEN) { setLdgAirport(""); return; }
+      const v = String(value).toUpperCase();
+      if (!/^[A-Z]{4}$/.test(v)) return { error: "INVALID ENTRY" };
+      // POH p.9-83 LSK 1R: "A new airport may be entered in case of a
+      // diversion." We have no runway data for an airport outside the OFP, so
+      // say so rather than silently computing against the wrong runways.
+      if (v !== destIcao) return { error: "NO RWY DATA FOR ARPT" };
+      setLdgAirport(v);
+      return;
+    }
+    if (key === "ldgsurface") {
+      // Separate from BRK ACTION RPT — AeroData takes the more conservative
+      // of the two (POH p.9-81), and crews are told to set braking action
+      // first and leave surface alone.
+      const opts = ["DRY", "WET", "COMPACTED SNOW", "WET ICE"];
+      if (value === null) { setLdgSurface(opts[(opts.indexOf(ldgSurface) + 1) % opts.length]); return; }
+      if (value === DELETE_TOKEN) { setLdgSurface("DRY"); return; }
+      const v = String(value).toUpperCase();
+      if (!opts.includes(v)) return { error: "INVALID ENTRY" };
+      setLdgSurface(v);
+      return;
+    }
     if (key === "ldgrwy1" || key === "ldgrwy2" || key === "ldgrwy3") {
       const setter = key === "ldgrwy1" ? setLdgRwy1 : key === "ldgrwy2" ? setLdgRwy2 : setLdgRwy3;
       const cur = key === "ldgrwy1" ? ldgRwy1 : key === "ldgrwy2" ? ldgRwy2 : ldgRwy3;
@@ -739,23 +772,31 @@ export default function CduApp() {
     }
   }
 
+  // POH p.9-80 layout exactly:
+  //   1L RWY 1        1R AIRPORT
+  //   2L RWY 2        2R WIND
+  //   3L RWY 3        3R OAT/QNH
+  //   4L SURFACE      4R LDW
+  //   5L BRK ACTN RPT 5R LAND DATA>
+  //   6L <RETURN      6R DATALINK SEND*
+  // LDW is a direct entry on the real page, but per your reference tool it's
+  // derived from ZFW + ARR FUEL (entered on 2/2) and shown green here.
   const ldgCondFields = ldgData ? [
-    { key: "ldgrwy1", label: `${destIcao} RWY 1`, value: ldgRwy1, side: "L", editable: true, cyclable: true, tone: "amber", boxes: "000" },
-    { key: "ldgrwy2", label: `${destIcao} RWY 2`, value: ldgRwy2, side: "L", editable: true, cyclable: true, tone: "cyan" },
-    { key: "ldgrwy3", label: `${destIcao} RWY 3`, value: ldgRwy3, side: "L", editable: true, cyclable: true, tone: "cyan" },
-    { key: "rwycc",   label: "RWYCC",   value: rwycc ? `${rwycc} ${(RWYCC_OPTIONS.find(o => String(o.value) === rwycc)?.label || "").split(" - ")[1] || ""}`.trim() : "",
-      side: "L", editable: true, cyclable: true, tone: "amber", boxes: "0" },
-    { key: "ldgflap", label: "FLAP",    value: ldgFlap, side: "L", editable: true, cyclable: true, tone: "cyan" },
-    { key: "perfwb",  label: "",        value: "<PERF/W&B", side: "L", editable: true, selectable: true, tone: "white" },
-    { key: "ldgwind", label: "WIND",    value: String(ldgWind), side: "R", editable: true, tone: "amber", boxes: "000/00" },
-    { key: "ldgoatqnh", label: "OAT/QNH", value: ldgOat || ldgQnh ? `${ldgOat}/${ldgQnh}` : "", side: "R", editable: true, tone: "amber", boxes: "000/00.00" },
-    { key: "ldgzfw",  label: "ZFW",      value: ldgZfw,  side: "R", editable: true, tone: "amber", boxes: "000.0" },
-    { key: "arrfuel", label: "ARR FUEL", value: arrFuel, side: "R", editable: true, tone: "amber", boxes: "00.0" },
-    // LDW is derived (ZFW + ARR FUEL) and shown green as an output, matching
-    // the real tool — it is never an entry field.
-    { key: "ldw",     label: "LDW",      value: ldwLb != null ? fmtWeightK(ldwLb) : "", side: "R", editable: false, tone: "green" },
-    { key: "compute", label: "",        value: ldgReady ? "COMPUTE>" : "REQUEST*",
-      side: "R", editable: true, selectable: true, tone: ldgReady ? "white" : "amber" },
+    { key: "ldgrwy1", label: "RWY 1", value: ldgRwy1, side: "L", row: 0, editable: true, cyclable: true, tone: "amber", boxes: "000" },
+    { key: "ldgrwy2", label: "RWY 2", value: ldgRwy2, side: "L", row: 1, editable: true, cyclable: true, tone: "cyan" },
+    { key: "ldgrwy3", label: "RWY 3", value: ldgRwy3, side: "L", row: 2, editable: true, cyclable: true, tone: "cyan" },
+    { key: "ldgsurface", label: "SURFACE", value: ldgSurface, side: "L", row: 3, editable: true, cyclable: true, tone: "cyan" },
+    { key: "rwycc",   label: "BRK ACTION RPT",
+      value: rwycc ? (RWYCC_OPTIONS.find(o => String(o.value) === rwycc)?.label || rwycc).split(" - ")[1] || rwycc : "NONE",
+      side: "L", row: 4, editable: true, cyclable: true, tone: "cyan" },
+    { key: "ldgreturn", label: "", value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
+    { key: "ldgairport", label: "AIRPORT", value: ldgAirport || destIcao, side: "R", row: 0, editable: true, tone: "amber", boxes: "0000" },
+    { key: "ldgwind", label: "WIND", value: String(ldgWind), side: "R", row: 1, editable: true, tone: "cyan", boxes: "000/00" },
+    { key: "ldgoatqnh", label: "OAT/QNH", value: ldgOat || ldgQnh ? `${ldgOat}/${ldgQnh}` : "", side: "R", row: 2, editable: true, tone: "cyan", boxes: "000/00.00" },
+    { key: "ldw", label: "LDW", value: ldwLb != null ? fmtWeightK(ldwLb) : "", side: "R", row: 3, editable: false, tone: "green" },
+    { key: "ldgdata", label: "LAND", value: "DATA>", side: "R", row: 4, editable: true, selectable: true, tone: "white" },
+    { key: "compute", label: "DATALINK", value: ldgReady ? "SEND*" : "REQUEST*",
+      side: "R", row: 5, editable: true, selectable: true, tone: ldgReady ? "white" : "amber" },
   ] : [];
 
   // ── ACARS LDG CONDITIONS 2/2 — config that doesn't fit on 1/2 ─────────────
@@ -763,7 +804,29 @@ export default function CduApp() {
   // configuration belongs. REVERSERS materially changes landing distance, so
   // it stays an explicit crew selection rather than a hidden default.
   function handleLdgCond2Commit(key, value) {
-    if (key === "perfwb") { setPage("PERFWB"); return; }
+    if (key === "ldgreturn") { setPage("LANDCOND"); return; }
+    if (key === "compute") return handleLdgCondCommit("compute", value);
+    if (key === "ldgzfw" || key === "arrfuel") return handleLdgCondCommit(key, value);
+    // POH p.9-85 toggles. FLAP is 5 / FULL; the rest are two-state.
+    const toggles = {
+      ldgflap:    { states: ["5", "Full"], set: setLdgFlap, cur: ldgFlap,
+                    accept: v => (v === "FULL" ? "Full" : v === "5" ? "5" : null) },
+      ldgvis:     { states: ["NORMAL", "LOW VIS"], set: setLdgVis, cur: ldgVis,
+                    accept: v => (["NORMAL", "LOW VIS", "LOWVIS"].includes(v) ? (v === "NORMAL" ? "NORMAL" : "LOW VIS") : null) },
+      ldgantiice: { states: ["OFF", "ALL"], set: setLdgAntiIce, cur: ldgAntiIce,
+                    accept: v => (["OFF", "ALL"].includes(v) ? v : null) },
+      ldgstall:   { states: ["NO", "YES"], set: setLdgStallIce, cur: ldgStallIce,
+                    accept: v => (["NO", "YES"].includes(v) ? v : null) },
+    };
+    const t = toggles[key];
+    if (t) {
+      if (value === null) { t.set(t.states[(t.states.indexOf(t.cur) + 1) % t.states.length]); return; }
+      if (value === DELETE_TOKEN) { t.set(t.states[0]); return; }
+      const v = t.accept(String(value).toUpperCase());
+      if (!v) return { error: "INVALID ENTRY" };
+      t.set(v);
+      return;
+    }
     if (key === "ldgrev") {
       if (value === null) { setLdgRev(r => (r === "Both" ? "None" : "Both")); return; }
       const v = String(value).toUpperCase();
@@ -781,54 +844,130 @@ export default function CduApp() {
     }
   }
 
+  // POH p.9-85: FLAP / VISIBILITY / ANTI-ICE / STALL PROT ICE SPEED down the
+  // left, <RETURN at 6L, DATALINK SEND at 6R. ZFW and ARR FUEL are ours —
+  // they're what derive LDW on page 1/2 — and take the free right-hand slots.
   const ldgCond2Fields = ldgData ? [
-    { key: "ldgrev",  label: "REVERSERS",   value: ldgRev,     side: "L", editable: true, cyclable: true, tone: "cyan" },
-    { key: "vappadd", label: "VAPP = VREF+", value: ldgVappAdd, side: "L", editable: true, tone: "cyan" },
-    { key: "_l1",     label: "",            value: "",          side: "L", editable: false },
-    { key: "_l2",     label: "",            value: "",          side: "L", editable: false },
-    { key: "_l3",     label: "",            value: "",          side: "L", editable: false },
-    { key: "perfwb",  label: "",            value: "<PERF/W&B", side: "L", editable: true, selectable: true, tone: "white" },
+    { key: "ldgflap",   label: "FLAP",       value: ldgFlap === "Full" ? "FULL" : ldgFlap, side: "L", row: 0, editable: true, cyclable: true, tone: "cyan" },
+    { key: "ldgvis",    label: "VISIBILITY", value: ldgVis,      side: "L", row: 1, editable: true, cyclable: true, tone: "cyan" },
+    { key: "ldgantiice",label: "ANTI-ICE",   value: ldgAntiIce,  side: "L", row: 2, editable: true, cyclable: true, tone: "cyan" },
+    { key: "ldgstall",  label: "STALL PROT ICE SPEED", value: ldgStallIce, side: "L", row: 3, editable: true, cyclable: true, tone: "cyan" },
+    { key: "ldgrev",    label: "REVERSERS",  value: ldgRev.toUpperCase(), side: "L", row: 4, editable: true, cyclable: true, tone: "cyan" },
+    { key: "ldgreturn", label: "",           value: "<RETURN",   side: "L", row: 5, editable: true, selectable: true, tone: "white" },
+    { key: "ldgzfw",    label: "ZFW",        value: ldgZfw,      side: "R", row: 0, editable: true, tone: "amber", boxes: "000.0" },
+    { key: "arrfuel",   label: "ARR FUEL",   value: arrFuel,     side: "R", row: 1, editable: true, tone: "amber", boxes: "00.0" },
+    { key: "vappadd",   label: "VAPP = VREF+", value: ldgVappAdd, side: "R", row: 2, editable: true, tone: "cyan" },
+    { key: "compute",   label: "DATALINK",   value: ldgReady ? "SEND*" : "REQUEST*",
+      side: "R", row: 5, editable: true, selectable: true, tone: ldgReady ? "white" : "amber" },
   ] : [];
 
-  // ── ACARS LANDING RWY DATA — one page per requested runway ────────────────
-  function buildLdgFields(entry) {
-    const { rwy, result, weightLb } = entry;
-    const sp = result?.speeds ?? {};
-    const dist = result?.primaryDist;
-    const lda = Number(rwy.lda) || 0;
-    // Margin is the number that actually matters: required distance against
-    // the landing distance available.
-    const margin = dist != null && lda ? Math.round(lda - dist) : null;
-    const overrun = margin != null && margin < 0;
-    // SimBrief's own max landing weight for this runway, dry or wet by RwyCC.
-    const maxWt = (parseInt(rwycc, 10) || 6) >= 5 ? rwy.max_weight_dry : rwy.max_weight_wet;
-    const overWeight = maxWt && weightLb > Number(maxWt);
+  // ── ACARS LAND RWY DATA (POH p.9-87 to 9-89) ──────────────────────────────
+  // Page 1/5 is the request summary, 2/5 REMARKS, and 3/5-5/5 one identical
+  // page per requested runway.
+
+  // FACTORED vs UNFACTORED (POH p.9-89/9-90):
+  //   UNFACTORED — actual landing distance for the conditions. Assumes
+  //     touchdown 1,000 ft in, max wheel braking, NO reverser credit. This is
+  //     what controls once airborne, except on a slippery runway.
+  //   FACTORED — the dispatch distance per 14 CFR 121.195: the runway must be
+  //     at least 60% dry, with a further 15% for wet/slippery. Controls for
+  //     dispatch, and on a slippery runway it also controls in flight.
+  // naclandapp returns the actual (unfactored) figure, so the factored one is
+  // derived here by the same rule the report states.
+  function factoredDistance(actual, rwyccCode) {
+    if (actual == null) return null;
+    const dry = actual / 0.6;                 // 60% rule
+    return Math.round(rwyccCode >= 5 ? dry : dry * 1.15); // +15% wet/slippery
+  }
+
+  function buildLdgSummaryFields() {
+    const t = new Date();
+    const z = `${String(t.getUTCHours()).padStart(2, "0")}${String(t.getUTCMinutes()).padStart(2, "0")}Z`;
     return [
-      { key: "hdr", label: "RUNWAY / LDA", value: `${destIcao} ${rwy.id}   ${Math.round(lda)}FT`,
-        side: "C", row: 0, span: true, editable: false, tone: "green" },
-      { key: "cond", label: `RWYCC ${rwycc || "-"}   FLAP ${ldgFlap}`,
-        value: `REV ${ldgRev.toUpperCase()}   ${Number(rwy.gradient) >= 0 ? "UP" : "DN"} ${Math.abs(Number(rwy.gradient) || 0).toFixed(2)}`,
-        side: "C", row: 1, span: true, editable: false, tone: "green" },
-      { key: "vref", label: "VREF", value: sp.vref != null ? String(sp.vref) : "---", side: "L", row: 2, editable: false, tone: "green" },
-      { key: "ldr",  label: "LDR",  value: dist != null ? `${dist.toLocaleString()}FT` : "----", side: "C", row: 2, editable: false, tone: "green" },
-      { key: "vapp", label: "VAPP", value: sp.vapp != null ? String(sp.vapp) : "---", side: "R", row: 2, editable: false, tone: "green" },
-      { key: "vac",  label: "VAC",  value: sp.vac != null ? String(sp.vac) : "---", side: "L", row: 3, editable: false, tone: "green" },
-      { key: "margin", label: overrun ? "*** LDA EXCEEDED ***" : "MARGIN",
-        value: margin != null ? `${margin >= 0 ? "+" : ""}${margin.toLocaleString()}FT` : "----",
-        side: "C", row: 3, editable: false, tone: overrun ? "amber" : "green", error: overrun },
-      { key: "vfs",  label: "VFS",  value: sp.vfs != null ? String(sp.vfs) : "---", side: "R", row: 3, editable: false, tone: "green" },
-      { key: "lw",   label: overWeight ? "*** OVER MAX LW ***" : "LW / MAX",
-        value: `${fmtWeightK(weightLb)}/${maxWt ? fmtWeightK(Number(maxWt)) : "--"}`,
-        side: "C", row: 4, span: true, editable: false, tone: overWeight ? "amber" : "green", error: overWeight },
-      // SimBrief's own planned figure, shown as a cross-check rather than an
-      // answer — it's computed for ITS planned weight and conditions only.
-      { key: "ofp", label: "OFP PLANNED (CHECK)",
-        value: `VREF ${Math.round(ldgData?.distance_dry?.vref || 0) || "---"}  ${Math.round(ldgData?.distance_dry?.factored_distance || 0).toLocaleString()}FT`,
-        side: "C", row: 5, span: true, editable: false, tone: "green", small: true },
+      { key: "flt",  label: "FLT NO", value: fltNoEntry || String(xmlData?.flight_number ?? ""), side: "L", row: 0, editable: false, tone: "green" },
+      { key: "ldw",  label: "LDW",    value: ldwLb != null ? fmtWeightK(ldwLb) : "---", side: "C", row: 0, editable: false, tone: "green" },
+      { key: "time", label: "TIME",   value: z, side: "R", row: 0, editable: false, tone: "green" },
+      { key: "wind", label: "WIND",   value: String(ldgWind || "---"), side: "L", row: 1, editable: false, tone: "green" },
+      { key: "oat",  label: "OAT C",  value: String(ldgOat || "--"), side: "C", row: 1, editable: false, tone: "green" },
+      { key: "qnh",  label: "QNH",    value: String(ldgQnh || "-----"), side: "R", row: 1, editable: false, tone: "green" },
+      { key: "ret",  label: "",       value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
     ];
   }
 
-  const ldgPages = (ldgResults ?? []).map(e => ({ title: "ACARS LDG RWY DATA", fields: buildLdgFields(e) }));
+  // 2/5 — REMARKS. "NONE" when there's nothing to report, per the POH example.
+  function buildLdgRemarksFields() {
+    const notes = [];
+    if (ldgRev === "None") notes.push("NO THRUST REVERSER CREDIT");
+    if (ldgVis === "LOW VIS") notes.push("LOW VISIBILITY");
+    if (ldgAntiIce === "ALL") notes.push("ANTI-ICE ALL");
+    if (ldgStallIce === "YES") notes.push("STALL PROT ICE SPEED");
+    if ((parseInt(rwycc, 10) || 6) < 6) notes.push("ADVISORY ONLY - NOT CERTIFIED");
+    return [
+      { key: "hdr", label: "REMARKS", value: notes[0] || "NONE", side: "C", row: 0, span: true, editable: false, tone: "green" },
+      ...notes.slice(1, 5).map((n, i) => ({
+        key: `rm${i}`, label: "", value: n, side: "C", row: i + 1, span: true, editable: false, tone: "green",
+      })),
+      { key: "ret", label: "", value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
+    ];
+  }
+
+  // 3/5+ — per runway, laid out exactly as POH p.9-89:
+  //   CYEG 20                11000
+  //                          -0.13
+  //   ECS ON
+  //   FLAP   MLDW/LIM    VRF 128
+  //   5      82.0 /S     VAP ---
+  //          ALDW        VAC ---
+  //          63.0        VFS 177
+  //   FACTORED DIST      4361FT
+  //   UNFACTORED DIST    2616FT
+  function buildLdgFields(entry) {
+    const { rwy, result, weightLb } = entry;
+    const sp = result?.speeds ?? {};
+    const unfactored = result?.primaryDist ?? null;
+    const cc = parseInt(rwycc, 10) || 6;
+    const factored = factoredDistance(unfactored, cc);
+    const lda = Number(rwy.lda) || 0;
+    // MLDW / LIM — max landing weight and its limit code. SimBrief gives the
+    // structural figure per runway; "S" marks it as structurally limited.
+    const maxWt = cc >= 5 ? rwy.max_weight_dry : rwy.max_weight_wet;
+    const overWeight = maxWt && weightLb > Number(maxWt);
+    // Dispatch check is against the FACTORED distance (121.195).
+    const overrun = factored != null && lda > 0 && factored > lda;
+    return [
+      { key: "hdr", label: "", value: `${destIcao} ${rwy.id}${" ".repeat(Math.max(1, 12 - destIcao.length - String(rwy.id).length))}${Math.round(lda)}`,
+        side: "C", row: 0, span: true, editable: false, tone: "green" },
+      { key: "grad", label: "", value: `${Number(rwy.gradient) >= 0 ? "" : "-"}${Math.abs(Number(rwy.gradient) || 0).toFixed(2)}`,
+        side: "R", row: 1, editable: false, tone: "green" },
+      { key: "ecs", label: "", value: ldgAntiIce === "ALL" ? "ECS ON" : "ECS OFF", side: "L", row: 1, editable: false, tone: "green" },
+      { key: "flap", label: "FLAP",     value: String(ldgFlap === "Full" ? "FULL" : ldgFlap), side: "L", row: 2, editable: false, tone: "green" },
+      { key: "mldw", label: "MLDW/LIM", value: maxWt ? `${fmtWeightK(Number(maxWt))}/S` : "---", side: "C", row: 2, editable: false,
+        tone: overWeight ? "amber" : "green", error: overWeight },
+      { key: "vrf",  label: "VRF",      value: sp.vref != null ? String(sp.vref) : "---", side: "R", row: 2, editable: false, tone: "green" },
+      { key: "aldw", label: "ALDW",     value: ldwLb != null ? fmtWeightK(ldwLb) : "---", side: "C", row: 3, editable: false, tone: "green" },
+      { key: "vap",  label: "VAP",      value: sp.vapp != null ? String(sp.vapp) : "---", side: "R", row: 3, editable: false, tone: "green" },
+      { key: "vac",  label: "VAC",      value: sp.vac != null ? String(sp.vac) : "---", side: "R", row: 4, editable: false, tone: "green" },
+      { key: "fact", label: "FACTORED DIST",
+        value: factored != null ? `${factored.toLocaleString()}FT` : "----",
+        side: "C", row: 4, editable: false, tone: overrun ? "amber" : "green", error: overrun },
+      { key: "vfs",  label: "VFS",      value: sp.vfs != null ? String(sp.vfs) : "---", side: "R", row: 5, editable: false, tone: "green" },
+      { key: "unfact", label: "UNFACTORED DIST",
+        value: unfactored != null ? `${unfactored.toLocaleString()}FT` : "----",
+        side: "C", row: 5, editable: false, tone: "green" },
+      { key: "ret", label: "", value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
+    ];
+  }
+
+  const ldgPages = ldgResults ? [
+    { title: "ACARS LAND RWY DATA", fields: buildLdgSummaryFields() },
+    { title: "ACARS LAND RWY DATA", fields: buildLdgRemarksFields() },
+    ...ldgResults.map(e => ({ title: "ACARS LAND RWY DATA", fields: buildLdgFields(e) })),
+  ] : [];
+
+  // Posted to the scratchpad, as on the takeoff side (POH p.9-87).
+  const ldgMessage = ldgResults
+    ? { text: "LANDING DATA AVAIL", error: false }
+    : { text: "NO LANDING DATA AVAIL", error: true };
 
   // ── ACARS PAX DETAIL — LOADSHEET page 2/2 (POH p.9-75) ─────────────────────
   function handlePaxDetailCommit(key, value) {
@@ -1585,7 +1724,7 @@ export default function CduApp() {
     };
   } else if (page === "LANDCOND") {
     cduProps = {
-      title: "ACARS LD CONDITIONS", pageNum: "1/2",
+      title: "ACARS    LAND COND", pageNum: "1/2",
       fields: ldgCondFields,
       onFieldCommit: handleLdgCondCommit,
       execAvailable: false,
@@ -1595,7 +1734,7 @@ export default function CduApp() {
     };
   } else if (page === "LANDCOND2") {
     cduProps = {
-      title: "ACARS LD CONDITIONS", pageNum: "2/2",
+      title: "ACARS    LAND COND", pageNum: "2/2",
       fields: ldgCond2Fields,
       onFieldCommit: handleLdgCond2Commit,
       execAvailable: false,
@@ -1609,8 +1748,9 @@ export default function CduApp() {
       title: cur.title,
       pageNum: ldgPages.length ? `${ldgPageIndex + 1}/${ldgPages.length}` : "",
       fields: cur.fields,
-      onFieldCommit: () => {},
+      onFieldCommit: (k) => { if (k === "ret") setPage("LANDCOND"); },
       execAvailable: false,
+      message: ldgMessage,
       onPrev: () => {
         if (ldgPageIndex > 0) setLdgPageIndex(i => i - 1);
         else setPage("LANDCOND");
