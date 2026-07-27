@@ -436,13 +436,18 @@ export default function CduEmulator({
         </div>
 
         {/* ── LSK hit-targets — transparent, positioned over the image's own button graphics ── */}
+        {/* Bound to leftSlots/rightSlots — the SAME row mapping the text uses.
+            These indexed the raw filtered arrays instead, so on any page with
+            gaps in its rows the button and the line it sits next to referred
+            to different fields: a field drawn on row 5 was reachable from
+            LSK 3, and LSK 6 did nothing at all. */}
         {LSK_ROW_Y.map((y, i) => (
           <button key={`L${i}`} className="cdu-lsk cdu-lsk-left" style={{ top: `${y}%` }}
-            onClick={() => handleLsk(leftFields[i])} aria-label={`LSK L${i + 1}`} />
+            onClick={() => handleLsk(leftSlots[i])} aria-label={`LSK L${i + 1}`} />
         ))}
         {LSK_ROW_Y.map((y, i) => (
           <button key={`R${i}`} className="cdu-lsk cdu-lsk-right" style={{ top: `${y}%` }}
-            onClick={() => handleLsk(rightFields[i])} aria-label={`LSK R${i + 1}`} />
+            onClick={() => handleLsk(rightSlots[i])} aria-label={`LSK R${i + 1}`} />
         ))}
 
         {/* ── Function keys — the chassis image's own labels ARE the correct
