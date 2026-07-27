@@ -2264,22 +2264,34 @@ def generate_combined_output(loadsheet_data, uplink_data, valid_runways, anti_ic
                 v_label = 'VCL'
             else:
                 v_label = rwy.get('v_other_id', 'VFS')
-            v_val_raw = rwy.get('v_other') or rwy.get('vfs') or 'XXX'
-            if v_val_raw in ('XXX', 'None', None, ''):
+
+            def _as_int(x):
+                """None unless x really parses as a number."""
+                try:
+                    return int(float(x))
+                except (TypeError, ValueError):
+                    return None
+
+            # Test by PARSING, not truthiness: rwy['v_other'] is often a
+            # placeholder string like '---' or 'XXX', which is truthy, so the
+            # old `a or b or 'XXX'` chain accepted it, skipped the lookup, and
+            # then failed to convert — leaving VFS permanently blank on the
+            # E-Jets. SPEEDOTHER has E75L/E170/E190/E195 tables keyed on
+            # takeoff weight; use them whenever the runway dict has no usable
+            # number, exactly as the printed report does.
+            v_val = _as_int(rwy.get('v_other'))
+            if v_val is None:
+                v_val = _as_int(rwy.get('vfs'))
+            if v_val is None:
                 try:
                     from SPEEDOTHER import get_speed_other as _gso_cdu
-                    _so = _gso_cdu(_icaocode, weight=float(loadsheet_data.get('TOW', 0)))
+                    _so = _gso_cdu(_icaocode, weight=float(loadsheet_data.get('TOW', 0) or 0))
                     if _so:
-                        if _so.get('speed') is not None:
-                            v_val_raw = _so['speed']
+                        v_val = _as_int(_so.get('speed'))
                         if _so.get('name'):
                             v_label = _so['name']
-                except Exception:
-                    pass
-            try:
-                v_val = int(float(v_val_raw)) if v_val_raw not in ['XXX', 'None', None, ''] else None
-            except (TypeError, ValueError):
-                v_val = None
+                except Exception as _e:
+                    print(f"[WARN] VFS lookup failed for {_icaocode}: {_e}")
 
             # Structured result for the CDU — collected here so the frontend
             # gets authoritative JSON fields instead of re-parsing the text.

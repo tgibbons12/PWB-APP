@@ -298,7 +298,7 @@ export default function CduApp() {
       setOat(xmlData.temp ?? "");
       setQnh(xmlData.qnh ?? "");
       setWind(xmlData.wind ?? "");
-      setPtow(xmlData.est_tow_xml ? (Number(xmlData.est_tow_xml) / 1000).toFixed(1) : "");
+      setPtow(xmlData.est_tow_xml ? fmtWeightK(Number(xmlData.est_tow_xml)) : "");
       if (!runway1 && xmlData.plan_rwy && runwayIds.includes(xmlData.plan_rwy)) setRunway1(xmlData.plan_rwy);
 
       const paxTotal = Number(xmlData.pax_count_xml) || 0;
@@ -347,6 +347,35 @@ export default function CduApp() {
   // entries are summed on send. Bag COUNT is converted at the FAA standard
   // 30 lb/bag checked-baggage weight and added to the freight WT figure.
   const LB_PER_BAG = 30;
+
+  // Slashed fields (AD/CH, BAG/WT, ACM/FFA/AFA) accept either side on its own
+  // and keep whatever is already in the other. "20/2" then "/3" -> "20/3";
+  // "5" -> "5/2". An omitted side is left as-is rather than being blanked,
+  // which is how the real entry behaves.
+  function mergeSlashed(current, entry) {
+    const cur = String(current || "").split("/");
+    const inc = String(entry || "").split("/");
+    const parts = inc.map((p, i) => (p.trim() === "" ? (cur[i] ?? "") : p.trim()));
+    // Preserve any trailing segments the entry didn't mention at all.
+    for (let i = inc.length; i < cur.length; i++) parts[i] = cur[i];
+    return parts.join("/");
+  }
+
+  // Weights accept either raw pounds or thousands-with-a-decimal — "76300"
+  // and "76.3" are the same number. Anything containing a "." (or under 1000)
+  // is read as thousands, matching how the crew reads PTOW off the release.
+  function parseWeightLb(s) {
+    const t = String(s).trim();
+    if (!/^\d*\.?\d+$/.test(t)) return null;
+    const n = parseFloat(t);
+    if (!Number.isFinite(n)) return null;
+    return (t.includes(".") || n < 1000) ? Math.round(n * 1000) : Math.round(n);
+  }
+  // Display form used by the real pages: thousands, one decimal.
+  function fmtWeightK(lb) {
+    return lb == null ? "" : (lb / 1000).toFixed(1);
+  }
+
   function sumPair(s) {
     // "24/0" -> 24 + 0 ; "24" -> 24 ; "" -> 0
     return String(s).split("/").reduce((t, p) => t + (parseInt(p, 10) || 0), 0);
@@ -386,7 +415,27 @@ export default function CduApp() {
     const setter = setters[key];
     if (!setter) return;
     if (value === null) return; // not a cyclable field
-    setter(value === DELETE_TOKEN ? "" : value);
+    if (value === DELETE_TOKEN) { setter(""); return; }
+
+    // Slashed fields merge with what's already there (see mergeSlashed).
+    const current = {
+      adcha: adChA, adchb: adChB, adchc: adChC,
+      bagfwd: bagFwd, bagaft: bagAft, faacm: faAcm,
+    }[key];
+    if (current !== undefined) {
+      if (!/^[\d/]*$/.test(value)) return { error: "INVALID ENTRY" };
+      setter(mergeSlashed(current, value));
+      return;
+    }
+
+    // Fuel weights accept pounds or thousands ("7200" or "7.2").
+    if (key === "tofuel" || key === "blstfuel") {
+      const lb = parseWeightLb(value);
+      if (lb == null) return { error: "INVALID ENTRY" };
+      setter(String(lb));
+      return;
+    }
+    setter(value);
   }
 
   // Layout and wording taken from the real E175 loadsheet page: AD/CH A/B/C
@@ -394,16 +443,16 @@ export default function CduApp() {
   // PAX CLOSET, T/O FUEL, BLST FUEL, T/O DATA>, SEND. TTL PAX is a computed
   // green readout in the middle column, not an entry.
   const loadsheetFields = [
-    { key: "adcha",   label: "AD/CH A",      value: adChA,   side: "L", editable: true, tone: "amber" },
-    { key: "adchb",   label: "AD/CH B",      value: adChB,   side: "L", editable: true, tone: "amber" },
-    { key: "adchc",   label: "AD/CH C",      value: adChC,   side: "L", editable: true, tone: "amber" },
+    { key: "adcha",   label: "AD/CH A",      value: adChA,   side: "L", editable: true, tone: "amber", boxes: "00/0" },
+    { key: "adchb",   label: "AD/CH B",      value: adChB,   side: "L", editable: true, tone: "amber", boxes: "00/0" },
+    { key: "adchc",   label: "AD/CH C",      value: adChC,   side: "L", editable: true, tone: "amber", boxes: "00/0" },
     { key: "bagfwd",  label: "BAG/WT FWD",   value: bagFwd,  side: "L", editable: true, tone: "cyan" },
     { key: "bagaft",  label: "BAG/WT AFT",   value: bagAft,  side: "L", editable: true, tone: "cyan" },
     { key: "perfwb",  label: "",             value: "<PERF/W&B", side: "L", editable: true, selectable: true, tone: "white" },
     { key: "faacm",   label: "ACM/FFA/AFA",  value: faAcm,   side: "R", editable: true, tone: "cyan" },
     { key: "closet",  label: "CLOSET",       value: closet,  side: "R", editable: true, tone: "cyan" },
-    { key: "tofuel",  label: "T/O FUEL",     value: toFuel,  side: "R", editable: true, tone: "amber" },
-    { key: "blstfuel",label: "BLST FUEL",    value: blstFuel,side: "R", editable: true, tone: "cyan" },
+    { key: "tofuel",  label: "T/O FUEL",     value: toFuel ? fmtWeightK(Number(toFuel)) : "", side: "R", editable: true, tone: "amber", boxes: "00.0" },
+    { key: "blstfuel",label: "BLST FUEL",    value: blstFuel ? fmtWeightK(Number(blstFuel)) : "", side: "R", editable: true, tone: "cyan" },
     { key: "torwydata", label: "T/O",        value: "DATA>", side: "R", editable: true, selectable: true, tone: "white" },
     { key: "send",      label: "",           value: "SEND",  side: "R", editable: true, selectable: true, tone: "white" },
     { key: "ttlpax",  label: "TTL PAX",
@@ -614,9 +663,11 @@ export default function CduApp() {
     if (key === "wind")  { setWind(value === DELETE_TOKEN ? "" : value); return; }
     if (key === "ptow") {
       if (value === DELETE_TOKEN) { setPtow(""); return; }
-      // Thousands of pounds, one decimal (POH p.9-71: "76.4" = 76,400 lb).
-      if (!/^\d{1,3}(\.\d)?$/.test(value)) return { error: "INVALID ENTRY" };
-      setPtow(value);
+      // Accepts "76300" or "76.3" — both mean 76,400-ish lb. Displayed in
+      // thousands with one decimal, as on the release (POH p.9-71).
+      const lb = parseWeightLb(value);
+      if (lb == null) return { error: "INVALID ENTRY" };
+      setPtow(fmtWeightK(lb));
       return;
     }
     if (key === "oatqnh") {
@@ -640,7 +691,7 @@ export default function CduApp() {
   // LEVEL (contamination depth) is greyed: the backend's TLR interpolation
   // only carries DRY/WET tables, no compacted-snow/wet-ice depth data.
   const cond1Fields = xmlData ? [
-    { key: "rwy1",     label: `${depIcao} RWY 1`, value: runway1, side: "L", editable: true, cyclable: true, tone: "amber" },
+    { key: "rwy1",     label: `${depIcao} RWY 1`, value: runway1, side: "L", editable: true, cyclable: true, tone: "amber", boxes: "000" },
     { key: "rwy2",     label: `${depIcao} RWY 2`, value: runway2, side: "L", editable: true, cyclable: true, tone: "cyan" },
     { key: "rwy3",     label: `${depIcao} RWY 3`, value: runway3, side: "L", editable: true, cyclable: true, tone: "cyan" },
     { key: "surface",  label: "SURFACE",   value: SURFACE_LABELS[surface] ?? surface, side: "L", editable: true, cyclable: true, tone: "cyan" },
@@ -727,8 +778,10 @@ export default function CduApp() {
     { key: "flaps",   label: "FLAP",     value: flapSel === "OPTIMUM" ? "OPT" : flapSel, side: "L", editable: true, cyclable: true, tone: "cyan" },
     { key: "antiice", label: "ANTI-ICE", value: antiIce ? "ALL" : "AUTO", side: "L", editable: true, cyclable: true, tone: "cyan" },
     { key: "thrust",  label: "THRUST",   value: forceMax ? "MAX" : "NORMAL", side: "L", editable: true, cyclable: true, tone: "cyan" },
-    { key: "relversion", label: "RLS VERSION", value: relVersion, side: "L", editable: true,
-      tone: relVersion && !relOk ? undefined : "cyan", error: !!relVersion && !relOk },
+    // Amber = mandatory entry (POH colour note): this app blocks SEND until a
+    // release version is entered and matches the OFP, so it is mandatory here.
+    { key: "relversion", label: "RLS VERSION", value: relVersion, side: "L", editable: true, boxes: "0",
+      tone: relVersion && !relOk ? undefined : "amber", error: !!relVersion && !relOk },
     { key: "_c2pad",  label: "",         value: "",              side: "L", editable: false },
     { key: "perfwb",  label: "",         value: "<PERF/W&B",     side: "L", editable: true, selectable: true, tone: "white" },
   ] : [];

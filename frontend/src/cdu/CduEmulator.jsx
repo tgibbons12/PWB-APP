@@ -90,10 +90,17 @@ function validateField(fieldKey, raw) {
 
 // One line-pair: a label line (small, dim) and a data line (large, bright).
 // side: "L" | "R" | "C" (center, no LSK)
-function CduLine({ label, value, side, editable, small, error, cyclable, tight, dim, tone }) {
+function CduLine({ label, value, side, editable, small, error, cyclable, tight, dim, tone, boxes }) {
+  // Empty-field placeholder follows the real convention (and the POH colour
+  // note): a MANDATORY entry shows amber entry boxes, an OPTIONAL entry shows
+  // cyan dashes. `boxes` is how many characters the field expects; the "/"
+  // in a slashed field is kept literal so the shape of the entry is obvious.
+  const placeholder = tone === "amber"
+    ? String(boxes || "----").replace(/[^/]/g, "▯")
+    : "----";
   const displayValue = value
     ? `${cyclable && editable ? "↓" : ""}${value}`
-    : (editable ? "----" : " ");
+    : (editable ? placeholder : " ");
   // Explicit `tone` wins; otherwise fall back to the old editable=green rule.
   const toneClass = dim ? "cdu-dim" : tone ? `cdu-tone-${tone}` : editable ? "cdu-editable" : "";
   return (
@@ -301,7 +308,7 @@ export default function CduEmulator({
   const renderCell = (f, side) => f
     ? <CduLine key={f.key} label={f.label} value={f.value} side={side} editable={f.editable}
         small={f.small} error={f.error} cyclable={f.cyclable}
-        tight={f.tight} dim={f.dim} tone={f.tone} />
+        tight={f.tight} dim={f.dim} tone={f.tone} boxes={f.boxes} />
     : null;
 
   return (
@@ -335,7 +342,7 @@ export default function CduEmulator({
                   f.pack
                     ? <CduPackLine key={f.key || i} pack={f.pack} tight={f.tight} />
                     : <div key={f.key || i} className={f.wide ? "cdu-wide" : ""}>
-                        <CduLine label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} tight={f.tight} dim={f.dim} tone={f.tone} />
+                        <CduLine label={f.label} value={f.value} side="C" editable={f.editable} small={f.small} error={f.error} cyclable={f.cyclable} tight={f.tight} dim={f.dim} tone={f.tone} boxes={f.boxes} />
                       </div>
                 ))}
               </div>
@@ -485,10 +492,10 @@ const CDU_CSS = `
   overflow: hidden; }
 /* Title line is the SAME size as the body text on the real unit — having it
    smaller was part of what made the rows look mis-spaced against the LSKs. */
-.cdu-screen-header { display: flex; align-items: center; justify-content: space-between; color: #4ee39a;
+.cdu-screen-header { display: flex; align-items: center; justify-content: space-between; color: #f2f2f2;
   font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw; padding-bottom: 1%;
-  border-bottom: 1px solid #2a3a30; flex-shrink: 0; }
-.cdu-page-num { color: #4ee39a; font-weight: 400; }
+  border-bottom: 1px solid #333; flex-shrink: 0; }
+.cdu-page-num { color: #f2f2f2; font-weight: 400; }
 /* Spans the whole screen box so row positions can be expressed directly in
    screen-box percentages (see ROW_Y_IN_SCREEN). */
 .cdu-screen-body { position: absolute; left: 4%; right: 4%; top: 0; bottom: 0;
@@ -512,33 +519,34 @@ const CDU_CSS = `
 .cdu-line-tight { line-height: 1; }
 .cdu-line-tight .cdu-line-label { font-size: 2.8cqw; }
 .cdu-line-tight .cdu-line-value { font-size: 3.6cqw; }
-.cdu-line-label { color: #4ee39a; font-size: 3.0cqw; letter-spacing: 0.12cqw; white-space: nowrap; }
-.cdu-line-value { color: #4ee39a; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw; white-space: nowrap; }
+/* Labels are WHITE on the real screen, same as the title — not cyan. */
+.cdu-line-label { color: #f2f2f2; font-size: 3.0cqw; letter-spacing: 0.12cqw; white-space: nowrap; }
+.cdu-line-value { color: #f2f2f2; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw; white-space: nowrap; }
 .cdu-line-value.cdu-line-small { font-size: 3.5cqw; font-weight: 400; }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
 .cdu-line-pack { display: flex; flex-direction: row; line-height: 1.05; }
 .cdu-line-pack.cdu-line-tight { line-height: 1; }
 .cdu-pack-item { flex: 1; text-align: center; }
-.cdu-editable { color: #4ee39a; }
-/* The POH (ch.9 sec.16) describes a four-colour scheme — white menu items,
-   amber mandatory, cyan optional, green output — but photos of the actual
-   E175 unit show a near-monochrome GREEN screen with amber used only for
-   values the crew has typed in. The photos win, as everywhere else here, so
-   every tone resolves to the same green except amber. The distinctions are
-   kept as separate classes so the four-colour scheme can be restored if a
-   colour-screen variant ever needs it. */
-.cdu-tone-white { color: #4ee39a; }
-.cdu-tone-cyan  { color: #4ee39a; }
-.cdu-tone-green { color: #4ee39a; }
-.cdu-tone-amber { color: #ffc44d; }
-.cdu-dim { color: #2f6b4e; }
+.cdu-editable { color: #35d6ff; }
+/* Colour scheme from the WebFMC reference screens (same source as the chassis
+   image), which matches the POH's description in ch.9 sec.16: labels and menu
+   lines WHITE, optional/entered values CYAN, AeroData outputs GREEN, mandatory
+   entries AMBER, V-speeds occasionally magenta. An earlier pass made the whole
+   screen monochrome green off a couple of green-looking cockpit photos — that
+   was wrong; those were a tinted photo of a different unit. */
+.cdu-tone-white { color: #f2f2f2; }
+.cdu-tone-cyan  { color: #35d6ff; }
+.cdu-tone-green { color: #4dff7c; }
+.cdu-tone-amber { color: #ffb020; }
+.cdu-tone-magenta { color: #ff6ee0; }
+.cdu-dim { color: #5a5a5a; }
 .cdu-line-error { color: #ff5c4d; }
 /* Pinned to the bottom of the screen box — the body is absolutely positioned
    over the whole box now, so the scratchpad can't rely on flow order. */
 .cdu-scratchpad { position: absolute; left: 4%; right: 4%; bottom: 2%;
-  color: #d8ffe8; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw;
-  border-top: 1px solid #2a3a30; padding-top: 1%; min-height: 4.9cqw;
+  color: #fff; font-size: 4.5cqw; font-weight: 400; letter-spacing: 0.14cqw;
+  border-top: 1px solid #333; padding-top: 1%; min-height: 4.9cqw;
   white-space: nowrap; overflow: hidden; }
 .cdu-scratch-error { color: #ff5c4d; }
 
