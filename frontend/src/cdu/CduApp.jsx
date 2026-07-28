@@ -453,7 +453,7 @@ export default function CduApp() {
 
   const atisFields = [
     { key: "airport", label: "AIRPORT", value: atisIcao, side: "L", row: 0, editable: true, tone: "amber", boxes: "0000" },
-    { key: "arrdep",  label: "", value: atisArr ? "*ARRIVAL<SEL>" : "*DEPART<SEL>", side: "L", row: 1,
+    { key: "arrdep",  label: "TYPE", value: atisArr ? "ARRIVAL" : "DEPART", side: "L", row: 1,
       editable: true, cyclable: true, tone: "cyan" },
     { key: "return",  label: "", value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
     { key: "request", label: "DATALINK", value: "REQUEST*", side: "R", row: 5, editable: true, selectable: true, tone: "white" },
@@ -463,7 +463,7 @@ export default function CduApp() {
   const ATIS_LINES_PER_PAGE = 5;
   const atisPages = (() => {
     if (!atisResult) return [];
-    const lines = wrapText(atisResult.text || "", 22);
+    const lines = wrapText(atisResult.text || "", 30);
     const out = [];
     for (let i = 0; i < lines.length; i += ATIS_LINES_PER_PAGE) {
       out.push(lines.slice(i, i + ATIS_LINES_PER_PAGE));
@@ -1051,19 +1051,23 @@ export default function CduApp() {
   // page per requested runway.
 
   // FACTORED vs UNFACTORED (POH p.9-89/9-90):
-  //   UNFACTORED — actual landing distance for the conditions. Assumes
-  //     touchdown 1,000 ft in, max wheel braking, NO reverser credit. This is
-  //     what controls once airborne, except on a slippery runway.
-  //   FACTORED — the dispatch distance per 14 CFR 121.195: the runway must be
-  //     at least 60% dry, with a further 15% for wet/slippery. Controls for
-  //     dispatch, and on a slippery runway it also controls in flight.
-  // naclandapp returns the actual (unfactored) figure, so the factored one is
-  // derived here by the same rule the report states.
-  function factoredDistance(actual, rwyccCode) {
-    if (actual == null) return null;
-    const dry = actual / 0.6;                 // 60% rule
-    return Math.round(rwyccCode >= 5 ? dry : dry * 1.15); // +15% wet/slippery
-  }
+  //   UNFACTORED — actual landing distance: touchdown 1,000 ft in, max wheel
+  //     braking, NO reverser credit. Controls once airborne, except on a
+  //     slippery runway.
+  //   FACTORED — the dispatch distance per 14 CFR 121.195 (60% rule, +15%
+  //     wet/slippery). Controls for dispatch.
+  //
+  // The naclandapp tables are "Operational Landing Distance" (E190
+  // AOM-1502-016 header) and its own UI calls the result "Required Landing
+  // Distance" — i.e. they are ALREADY a factored/operational figure, not the
+  // raw demonstrated distance. Deriving a factored value from them by
+  // applying the 60% rule therefore double-counted the margin and inflated
+  // the answer by ~67%.
+  //
+  // So the table output is shown as FACTORED, and UNFACTORED comes from
+  // SimBrief's own TLR (which publishes actual and factored separately) —
+  // no conversion is invented between the two, because the basis of the
+  // E175 tables isn't stated and can't be assumed to match the E190's.
 
   function buildLdgSummaryFields() {
     const t = new Date();
@@ -1115,9 +1119,14 @@ export default function CduApp() {
   function buildLdgFields(entry) {
     const { rwy, result, weightLb } = entry;
     const sp = result?.speeds ?? {};
-    const unfactored = result?.primaryDist ?? null;
     const cc = parseInt(rwycc, 10) || 6;
-    const factored = factoredDistance(unfactored, cc);
+    // Table output IS the factored/operational required distance.
+    const factored = result?.primaryDist ?? null;
+    // Unfactored comes straight from the OFP's TLR, which publishes it
+    // separately. Only meaningful for the planned destination — a diversion
+    // has no TLR, so it shows dashes rather than a made-up number.
+    const ofpSet = cc >= 5 ? ldgData?.distance_dry : ldgData?.distance_wet;
+    const unfactored = (!rwy.fromIndex && ofpSet?.actual_distance) || null;
     const lda = Number(rwy.lda) || 0;
     // MLDW / LIM — max landing weight and its limit code. SimBrief gives the
     // structural figure per runway; "S" marks it as structurally limited.
@@ -1656,7 +1665,9 @@ export default function CduApp() {
   // 4/5, 5/5 are identical, one per runway request" pagination).
   // Report pages are read-only; PREV/PERF/MENU navigate away (there are no
   // <RETURN> lines any more).
-  function handleAcarsCommit() {}
+  function handleAcarsCommit(key) {
+    if (key === "ret") setPage("COND1");
+  }
 
   // Center column is PACKED two-values-per-row (same technique the real
   // AeroData printout uses) instead of one field per line — with all 6 of
@@ -1795,12 +1806,16 @@ export default function CduApp() {
     if (kind === "airbus") {
       return [
         ...head,
-        { key: "v1",   label: "V1",       value: String(rd.v1), side: "L", editable: false, tone: "green" },
-        { key: "vr",   label: "VR",       value: String(rd.vr), side: "L", editable: false, tone: "green" },
-        { key: "v2",   label: "V2",       value: String(rd.v2), side: "L", editable: false, tone: "green" },
+        // Explicit rows: rows 0-1 are the full-width header, so these start at
+        // row 2. Without them these fields landed on row 0 and broke the
+        // header's span, truncating "KDEN 34L 16000FT".
+        { key: "v1",   label: "V1",       value: String(rd.v1), side: "L", row: 2, editable: false, tone: "green" },
+        { key: "vr",   label: "VR",       value: String(rd.vr), side: "L", row: 3, editable: false, tone: "green" },
+        { key: "v2",   label: "V2",       value: String(rd.v2), side: "L", row: 4, editable: false, tone: "green" },
         { key: "flths",label: "FL/THS",   value: `${rd.flaps}/UP${String(rd.trim_stab || "").split(" ").pop() || "0.0"}`,
-          side: "R", editable: false, tone: "green" },
-        { key: "flex", label: "FLEX",     value: String(rd.flex), side: "R", editable: false, tone: "green" },
+          side: "R", row: 2, editable: false, tone: "green" },
+        { key: "flex", label: "FLEX",     value: String(rd.flex), side: "R", row: 3, editable: false, tone: "green" },
+        { key: "ret",  label: "",         value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
         { key: "alts", label: "TR / ACC / EO", value: `${rd.tr_alt} ${rd.acc_alt} ${rd.eo_alt}`,
           side: "C", row: 5, span: true, editable: false, tone: "green" },
       ];
@@ -1811,16 +1826,18 @@ export default function CduApp() {
     if (kind === "boeing") {
       return [
         ...head,
-        { key: "flaps", label: "FLAPS",    value: String(rd.flaps), side: "L", editable: false, tone: "green" },
+        // Explicit rows — rows 0-1 belong to the full-width header.
+        { key: "flaps", label: "FLAPS",    value: String(rd.flaps), side: "L", row: 2, editable: false, tone: "green" },
         { key: "mrtw",  label: "MRTW/LIM", value: String(rd.mrtw),  side: "C", row: 2, editable: false, tone: "green" },
-        { key: "v1",    label: "V1",       value: String(rd.v1),    side: "R", editable: false, tone: "green" },
-        { key: "stab",  label: "STAB",     value: String(rd.trim_stab), side: "L", editable: false, tone: "green" },
+        { key: "v1",    label: "V1",       value: String(rd.v1),    side: "R", row: 2, editable: false, tone: "green" },
+        { key: "stab",  label: "STAB",     value: String(rd.trim_stab), side: "L", row: 3, editable: false, tone: "green" },
         { key: "mtow",  label: "MTOW",     value: String(rd.mtow),  side: "C", row: 3, editable: false, tone: "green" },
-        { key: "vr",    label: "VR",       value: String(rd.vr),    side: "R", editable: false, tone: "green" },
-        { key: "seloat",label: "SEL/OAT",  value: String(rd.sel_oat || ""), side: "L", editable: false, tone: "green" },
+        { key: "vr",    label: "VR",       value: String(rd.vr),    side: "R", row: 3, editable: false, tone: "green" },
+        { key: "seloat",label: "SEL/OAT",  value: String(rd.sel_oat || ""), side: "L", row: 4, editable: false, tone: "green" },
         { key: "ptow",  label: "PTOW/CG",  value: String(rd.gtow_cg), side: "C", row: 4, editable: false, tone: "green" },
-        { key: "v2",    label: "V2",       value: String(rd.v2),    side: "R", editable: false, tone: "green" },
-        ...(rd.n1 ? [{ key: "n1", label: rd.thr_label || "N1", value: String(rd.n1), side: "R", editable: false, tone: "green" }] : []),
+        { key: "v2",    label: "V2",       value: String(rd.v2),    side: "R", row: 4, editable: false, tone: "green" },
+        ...(rd.n1 ? [{ key: "n1", label: rd.thr_label || "N1", value: String(rd.n1), side: "R", row: 5, editable: false, tone: "green" }] : []),
+        { key: "ret",   label: "",         value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
       ];
     }
 
@@ -1844,6 +1861,7 @@ export default function CduApp() {
       ...(kind === "erj" && rd.v215 != null
         ? [{ key: "v215", label: "V215", value: String(rd.v215), side: "C", row: 5, editable: false, tone: "green" }]
         : []),
+      { key: "ret", label: "", value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
     ];
   }
 

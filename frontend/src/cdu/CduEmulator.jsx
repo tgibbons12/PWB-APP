@@ -291,6 +291,7 @@ export default function CduEmulator({
         if (result && result.error) {
           setScratchpad(result.error);
           setScratchIsError(true);
+          setScratchIsSystem(true);
         }
       }
       return; // empty scratchpad + LSK on a plain field = no-op
@@ -306,6 +307,7 @@ export default function CduEmulator({
       if (result && result.error) {
         setScratchpad(result.error);
         setScratchIsError(true);
+        setScratchIsSystem(true);
         return;
       }
       setScratchpad("");
@@ -323,6 +325,7 @@ export default function CduEmulator({
     if (result && result.error) {
       setScratchpad(result.error);
       setScratchIsError(true);
+      setScratchIsSystem(true);
       return;
     }
 
