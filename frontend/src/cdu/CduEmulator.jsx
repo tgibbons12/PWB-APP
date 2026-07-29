@@ -637,6 +637,11 @@ body { margin: 0; }
   display: flex; flex-direction: column; align-items: stretch; }
 .cdu-loose .cdu-line { line-height: 1.0; }
 .cdu-loose .cdu-line-value { font-size: calc(var(--u) * 0.043); }
+/* A loose line marked "small" keeps the small size — spelled out because the
+   rule above is equally specific to .cdu-line-value.cdu-line-small and would
+   otherwise decide it on source order alone. The D-ATIS block depends on
+   this: 0.035u is what makes 40 characters fit a line instead of 32. */
+.cdu-loose .cdu-line-value.cdu-line-small { font-size: calc(var(--u) * 0.035); }
 /* Monospace text blocks (the runway data block, REMARKS, SPECIAL) rely on
    column alignment, so spaces must be preserved verbatim. */
 .cdu-wide .cdu-line-value { font-variant-numeric: tabular-nums; }
@@ -663,6 +668,13 @@ body { margin: 0; }
 .cdu-line-value.cdu-line-sel { font-size: calc(var(--u) * 0.050); }
 .cdu-line-R .cdu-line-label, .cdu-line-R .cdu-line-value { text-align: right; }
 .cdu-line-C .cdu-line-label, .cdu-line-C .cdu-line-value { text-align: center; }
+/* A "wide" free-text line stays LEFT aligned even though it's a centre-side
+   field. Needed explicitly: .cdu-wide's left-align above has the same
+   specificity as the .cdu-line-C centring rule directly above, so the
+   centring would win on source order and leave wrapped prose (the D-ATIS
+   block) ragged down both edges. */
+.cdu-wide .cdu-line-C .cdu-line-label,
+.cdu-wide .cdu-line-C .cdu-line-value { text-align: left; }
 .cdu-line-pack { display: flex; flex-direction: row; line-height: 1.05; }
 .cdu-line-pack.cdu-line-tight { line-height: 1; }
 .cdu-pack-item { flex: 1; text-align: center; }

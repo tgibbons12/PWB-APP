@@ -460,10 +460,24 @@ export default function CduApp() {
   ];
 
   // ATIS text wrapped onto the screen, paged so a long D-ATIS is readable.
-  const ATIS_LINES_PER_PAGE = 5;
+  //
+  // Width is set by the glyph advance, not by choice: VCR OSD Mono advances
+  // 0.5859em, and a line costs (fontSize * 0.5859 + letterSpacing) per char
+  // against a body 0.92u wide. At the normal value size (0.044u) only ~32
+  // chars fit, which is why widening the wrap alone did nothing. At the
+  // `small` size (0.035u) a char costs 0.0227u, so 40 fit (0.908u).
+  //
+  // The lines are laid out LOOSE (no `row`) rather than pinned to LSK rows.
+  // Pinned rows cap the block at 4 usable lines — row 5 already holds
+  // <RETURN, and a row containing an L field stops being full-width, so the
+  // 5th line was being squeezed into the middle third of a 3-column grid.
+  // Flowing them frees the whole screen for ~11 lines, the same way the
+  // LAND RWY DATA report block works.
+  const ATIS_LINES_PER_PAGE = 11;
+  const ATIS_WRAP_COLS = 40;
   const atisPages = (() => {
     if (!atisResult) return [];
-    const lines = wrapText(atisResult.text || "", 30);
+    const lines = wrapText(atisResult.text || "", ATIS_WRAP_COLS);
     const out = [];
     for (let i = 0; i < lines.length; i += ATIS_LINES_PER_PAGE) {
       out.push(lines.slice(i, i + ATIS_LINES_PER_PAGE));
@@ -472,10 +486,17 @@ export default function CduApp() {
   })();
 
   const atisMsgFields = atisResult ? [
+    // Header flows with the text rather than sitting on LSK row 0, which would
+    // land on top of the loose block (row 0 renders at 21.9% of the screen,
+    // the block starts at 13%).
     { key: "hdr", label: `${atisResult.source}${atisResult.letter ? ` INFO ${atisResult.letter}` : ""}`,
-      value: `${atisResult.airport}  ${atisResult.fetched}`, side: "C", row: 0, span: true, editable: false, tone: "green" },
+      value: `${atisResult.airport}  ${atisResult.fetched}`, side: "C",
+      wide: true, small: true, editable: false, tone: "green" },
     ...(atisPages[atisPageIndex] || []).map((l, i) => ({
-      key: `at${i}`, label: "", value: l, side: "C", row: i + 1, span: true, editable: false, tone: "green",
+      key: `at${i}`, label: "", value: l, side: "C",
+      // `wide` left-aligns and frees the full screen width — centring wrapped
+      // prose leaves a ragged right edge that reads badly.
+      wide: true, small: true, editable: false, tone: "green",
     })),
     { key: "return", label: "", value: "<RETURN", side: "L", row: 5, editable: true, selectable: true, tone: "white" },
   ] : [];

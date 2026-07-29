@@ -1,0 +1,17 @@
+Since then, I find JARDesign A330's pop-up MCDU texture not realistic. From the color of the MCDU to its texture itself.
+So I made a texture replacement for the pop-up MCDU of the JARDesign A330 to make it look realistic (like ToLiss' MCDU) 
+to add to the overall satisfaction while flying the aircraft. 
+
+Installation: (Backup original files first in case you want to revert back.)
+
+- Just put the files inside the MCDU folder to: X-Plane 11/Aircraft/Laminar Research/JARDesign A330/plugins/fmgs/MCDU
+- Then replace all the files inside JARDesign A330's MCDU folder.
+
+
+
+If you want to make your JARDesign A330 much more realistic, I highly recommend to download these retextures from the provided links below.
+
+• JARDesign A330 Cockpit Retextured by Verticalsim: https://forums.x-plane.org/index.php?/files/file/64150-jardesign-a330-cockpit-rextured/
+
+• JARDesign A330 (PFD, ND, TARA) Fix by GA142: https://forums.x-plane.org/index.php?/files/file/86159-jardesign-a330-jd330-pfd-nd-tara-fix/z
+
